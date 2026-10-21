@@ -72,6 +72,32 @@ describe('JsonStore', () => {
     assert.equal(fs.existsSync(path.join(dir('throws'), 'db.json')), false);
   });
 
+  test('a mutation that calls skipWrite returns its result without touching the disk', async () => {
+    const store = await JsonStore.open(dir('skip'));
+    const result = await store.mutate((_d, tx) => {
+      tx.skipWrite();
+      return 'unchanged';
+    });
+    assert.equal(result, 'unchanged');
+    assert.equal(fs.existsSync(path.join(dir('skip'), 'db.json')), false);
+  });
+
+  test('records which backup a corrupted file was moved to', async () => {
+    fs.mkdirSync(dir('recovered'), { recursive: true });
+    fs.writeFileSync(path.join(dir('recovered'), 'db.json'), 'not json');
+    const store = await JsonStore.open(dir('recovered'));
+    assert.match(store.recoveredFrom ?? '', /^db\.corrupt-\d+\.json$/);
+    assert.equal((await JsonStore.open(dir('fresh2'))).recoveredFrom, null);
+  });
+
+  test('a file with malformed records is treated as corrupted instead of crashing later', async () => {
+    fs.mkdirSync(dir('records'), { recursive: true });
+    fs.writeFileSync(path.join(dir('records'), 'db.json'), '{"forms":[{"id":"a"}],"responses":[],"sessions":[]}');
+    const store = await JsonStore.open(dir('records'));
+    assert.deepEqual(store.data.forms, []);
+    assert.ok(store.recoveredFrom);
+  });
+
   test('backs up a corrupted file and starts empty', async () => {
     fs.mkdirSync(dir('corrupt'), { recursive: true });
     fs.writeFileSync(path.join(dir('corrupt'), 'db.json'), '{"forms": [ broken');

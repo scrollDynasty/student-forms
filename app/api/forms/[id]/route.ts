@@ -1,5 +1,5 @@
 import { connection } from 'next/server';
-import { deleteForm, getForm, updateForm } from '@/lib/server/forms';
+import { countResponses, deleteForm, getForm, updateForm } from '@/lib/server/forms';
 import { assertSameOrigin, handle, json, noContent, readJsonObject } from '@/lib/server/http';
 import { getStore } from '@/lib/server/store';
 
@@ -9,7 +9,8 @@ export function GET(_request: Request, ctx: Ctx) {
   return handle(async () => {
     await connection();
     const { id } = await ctx.params;
-    return json({ form: getForm(await getStore(), id) });
+    const store = await getStore();
+    return json({ form: getForm(store, id), responseCount: countResponses(store, id) });
   });
 }
 

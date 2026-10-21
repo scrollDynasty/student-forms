@@ -32,6 +32,13 @@ function findByPublicId(data: DbData, publicId: string): StoredForm {
   return form;
 }
 
+/** Optimistic locking: a client that sends the version it last saw must not overwrite newer changes. */
+function assertCurrentVersion(form: StoredForm, version: unknown) {
+  if (version != null && version !== form.version) {
+    throw new ApiError(409, 'VERSION_CONFLICT', 'Форму уже изменили в другой вкладке. Загрузите актуальную версию.');
+  }
+}
+
 const notPublished = () => new ApiError(403, 'FORM_NOT_PUBLISHED', 'Форма сейчас не принимает ответы');
 
 export function toPublicForm(form: StoredForm) {
@@ -60,6 +67,10 @@ export function listForms(store: JsonStore) {
       publishedAt: f.publishedAt,
     }))
     .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
+}
+
+export function countResponses(store: JsonStore, formId: string): number {
+  return store.data.responses.filter((r) => r.formId === formId).length;
 }
 
 export function getForm(store: JsonStore, id: string): StoredForm {
@@ -92,9 +103,7 @@ export function updateForm(store: JsonStore, id: string, body: Record<string, un
   const { value, errors } = normalizeFormInput(body);
   return store.mutate((data) => {
     const form = findForm(data, id);
-    if (body.version != null && body.version !== form.version) {
-      throw new ApiError(409, 'VERSION_CONFLICT', 'Форму уже изменили в другой вкладке. Загрузите актуальную версию.');
-    }
+    assertCurrentVersion(form, body.version);
     if (!Array.isArray(body.fields)) throw validationError({ fields: 'Передайте полный список полей формы' });
     if (!value || hasErrors(errors)) throw validationError(errors);
     if (form.status === 'published' && value.fields.length === 0) {
@@ -105,12 +114,19 @@ export function updateForm(store: JsonStore, id: string, body: Record<string, un
   });
 }
 
-export function setPublished(store: JsonStore, id: string, published: boolean): Promise<StoredForm> {
+export function setPublished(
+  store: JsonStore,
+  id: string,
+  published: boolean,
+  version?: unknown,
+): Promise<StoredForm> {
   return store.mutate((data) => {
     const form = findForm(data, id);
+    assertCurrentVersion(form, version);
     if (published && form.fields.length === 0) {
       throw validationError({ fields: 'Добавьте хотя бы одно поле перед публикацией' });
     }
+    if (form.status === (published ? 'published' : 'draft')) return form;
     const ts = now();
     form.status = published ? 'published' : 'draft';
     if (published) form.publishedAt = ts;
@@ -224,14 +240,18 @@ export function submitResponse(
   publicId: string,
   body: Record<string, unknown>,
 ): Promise<{ status: 200 | 201; response: { id: string; submittedAt: string } }> {
-  return store.mutate((data) => {
+  return store.mutate((data, tx) => {
     const form = findByPublicId(data, publicId);
     if (!isUuid(body.submissionId)) {
       throw validationError({ submissionId: 'Некорректный идентификатор отправки' });
     }
+    const submissionId = body.submissionId.toLowerCase();
     // Idempotency first: a retry of an accepted submission is acknowledged even if the form changed since.
-    const duplicate = data.responses.find((r) => r.formId === form.id && r.submissionId === body.submissionId);
-    if (duplicate) return { status: 200, response: { id: duplicate.id, submittedAt: duplicate.submittedAt } };
+    const duplicate = data.responses.find((r) => r.formId === form.id && r.submissionId === submissionId);
+    if (duplicate) {
+      tx.skipWrite();
+      return { status: 200, response: { id: duplicate.id, submittedAt: duplicate.submittedAt } };
+    }
 
     if (form.status !== 'published') throw notPublished();
     if (typeof body.formVersion === 'number' && body.formVersion !== form.version) {
@@ -246,11 +266,11 @@ export function submitResponse(
     }
 
     const submittedAt = now();
-    const sessionId = isUuid(body.sessionId) ? body.sessionId : null;
+    const sessionId = isUuid(body.sessionId) ? body.sessionId.toLowerCase() : null;
     const response: StoredResponse = {
       id: randomUUID(),
       formId: form.id,
-      submissionId: body.submissionId,
+      submissionId,
       sessionId,
       formVersion: form.version,
       submittedAt,
@@ -270,19 +290,39 @@ export function submitResponse(
   });
 }
 
-export function recordEvent(store: JsonStore, publicId: string, body: Record<string, unknown>): Promise<void> {
-  return store.mutate((data) => {
-    const form = findByPublicId(data, publicId);
+/** Whether an analytics event would change the session (repeats after reloads are common). */
+function eventChangesSession(session: StoredSession, type: string, fieldId: unknown): boolean {
+  if (!session.viewedAt) return true;
+  if (type !== 'view' && !session.startedAt) return true;
+  return type === 'field' && typeof fieldId === 'string' && !session.fields.includes(fieldId);
+}
+
+export async function recordEvent(store: JsonStore, publicId: string, body: Record<string, unknown>): Promise<void> {
+  const { sessionId: rawSessionId, type, fieldId } = body;
+  const validate = (form: StoredForm) => {
     if (form.status !== 'published') throw notPublished();
-    const { sessionId, type, fieldId } = body;
-    if (!isUuid(sessionId)) throw validationError({ sessionId: 'Некорректный идентификатор сеанса' });
+    if (!isUuid(rawSessionId)) throw validationError({ sessionId: 'Некорректный идентификатор сеанса' });
     if (typeof type !== 'string' || !EVENT_TYPES.has(type)) throw validationError({ type: 'Неизвестный тип события' });
     if (type === 'field' && !form.fields.some((f) => f.id === fieldId)) {
       throw validationError({ fieldId: 'Неизвестное поле' });
     }
+    return { sessionId: rawSessionId.toLowerCase(), type };
+  };
 
+  // Fast path without copying the database: a repeated event changes nothing.
+  const committed = findByPublicId(store.data, publicId);
+  const { sessionId } = validate(committed);
+  const known = store.data.sessions.find((s) => s.id === sessionId && s.formId === committed.id);
+  if (known && !eventChangesSession(known, String(type), fieldId)) return;
+
+  await store.mutate((data, tx) => {
+    const form = findByPublicId(data, publicId);
+    validate(form);
     const session = upsertSession(data, form.id, sessionId);
-    if (!session) return;
+    if (!session || !eventChangesSession(session, String(type), fieldId)) {
+      tx.skipWrite();
+      return;
+    }
     const ts = now();
     session.viewedAt ??= ts;
     if (type === 'start' || type === 'field') session.startedAt ??= ts;

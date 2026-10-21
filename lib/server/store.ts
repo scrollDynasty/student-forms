@@ -43,12 +43,23 @@ export interface DbData {
 
 const FILE_NAME = 'db.json';
 const emptyData = (): DbData => ({ forms: [], responses: [], sessions: [] });
-const isValidShape = (v: unknown): v is DbData =>
-  typeof v === 'object' &&
-  v !== null &&
-  Array.isArray((v as DbData).forms) &&
-  Array.isArray((v as DbData).responses) &&
-  Array.isArray((v as DbData).sessions);
+const isObject = (v: unknown): v is Record<string, unknown> => typeof v === 'object' && v !== null && !Array.isArray(v);
+const hasStrings = (v: Record<string, unknown>, keys: string[]) => keys.every((k) => typeof v[k] === 'string');
+
+/** Checks every record, so a hand-edited file fails at startup instead of with 500s later. */
+function isValidShape(v: unknown): v is DbData {
+  if (!isObject(v) || !Array.isArray(v.forms) || !Array.isArray(v.responses) || !Array.isArray(v.sessions)) return false;
+  return (
+    v.forms.every((f) => isObject(f) && hasStrings(f, ['id', 'publicId', 'title', 'status', 'updatedAt']) && Array.isArray(f.fields)) &&
+    v.responses.every((r) => isObject(r) && hasStrings(r, ['id', 'formId', 'submittedAt']) && isObject(r.answers) && Array.isArray(r.fields)) &&
+    v.sessions.every((s) => isObject(s) && hasStrings(s, ['id', 'formId']) && Array.isArray(s.fields))
+  );
+}
+
+export interface MutationContext {
+  /** The mutation changed nothing: skip the disk write (and keep the current data). */
+  skipWrite(): void;
+}
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
@@ -61,6 +72,8 @@ const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 export class JsonStore {
   readonly file: string;
   data: DbData;
+  /** Backup file name if the data file was unreadable at startup and had to be set aside. */
+  recoveredFrom: string | null = null;
   private tmpCounter = 0;
   private queue: Promise<unknown> = Promise.resolve();
 
@@ -90,17 +103,24 @@ export class JsonStore {
       if (!isValidShape(parsed)) throw new Error('unexpected structure');
       return new JsonStore(dir, parsed);
     } catch (err) {
-      const backup = path.join(dir, `db.corrupt-${Date.now()}.json`);
-      await fs.rename(file, backup);
-      console.warn(`[store] ${file} is unreadable (${(err as Error).message}); moved to ${backup}, starting empty`);
-      return new JsonStore(dir, emptyData());
+      const backupName = `db.corrupt-${Date.now()}.json`;
+      await fs.rename(file, path.join(dir, backupName));
+      console.error(
+        `[store] ВНИМАНИЕ: файл данных ${file} повреждён (${(err as Error).message}). ` +
+          `Он сохранён как ${backupName}, сервис запущен с пустой базой.`,
+      );
+      const store = new JsonStore(dir, emptyData());
+      store.recoveredFrom = backupName;
+      return store;
     }
   }
 
-  mutate<T>(fn: (data: DbData) => T): Promise<T> {
+  mutate<T>(fn: (data: DbData, ctx: MutationContext) => T): Promise<T> {
     const run = async () => {
       const draft = structuredClone(this.data);
-      const result = fn(draft);
+      let skip = false;
+      const result = fn(draft, { skipWrite: () => (skip = true) });
+      if (skip) return result;
       await this.write(draft);
       this.data = draft;
       return result;
@@ -137,6 +157,27 @@ export class JsonStore {
       throw err;
     }
   }
+}
+
+/**
+ * Startup check: fail fast with a readable message instead of answering every save with a 500.
+ * Also loads the store, so a corrupted file is reported in the log right at boot.
+ */
+export async function assertDataDirWritable(): Promise<void> {
+  const dir = dataDir();
+  const probe = path.join(dir, `.write-check-${process.pid}`);
+  try {
+    await fs.mkdir(dir, { recursive: true });
+    await fs.writeFile(probe, '');
+    await fs.rm(probe);
+  } catch (err) {
+    const code = (err as NodeJS.ErrnoException).code ?? (err as Error).message;
+    throw new Error(
+      `Папка данных DATA_DIR=${dir} недоступна для записи (${code}). ` +
+        'Проверьте права или укажите другую папку: DATA_DIR=/путь npm start',
+    );
+  }
+  await getStore();
 }
 
 const globalStores = globalThis as typeof globalThis & { __studentFormsStores?: Map<string, Promise<JsonStore>> };

@@ -5,7 +5,7 @@ import { getStore } from '@/lib/server/store';
 export function POST(request: Request, ctx: RouteContext<'/api/public/forms/[publicId]/responses'>) {
   return handle(async () => {
     const { publicId } = await ctx.params;
-    rateLimit(request, `submit:${publicId}`, 30);
+    rateLimit(request, `submit:${publicId}`, 60, 600);
     const store = await getStore();
     const { status, response } = await submitResponse(store, publicId, await readJsonObject(request));
     return json({ response }, status);

@@ -5,6 +5,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { randomUUID } from 'node:crypto';
+import http from 'node:http';
 import { startServer, type TestServer } from './helpers/server';
 
 // Black-box contract tests against the real production server (`next start`).
@@ -401,10 +402,10 @@ describe('forms API', () => {
     const form = await createPublished();
     const url = `/api/public/forms/${form.publicId}/responses`;
     const statuses: number[] = [];
-    for (let i = 0; i < 35; i++) {
+    for (let i = 0; i < 65; i++) {
       statuses.push((await srv.call('POST', url, { answers: VALID, submissionId: randomUUID() })).status);
     }
-    assert.equal(statuses.filter((s) => s === 201).length, 30);
+    assert.equal(statuses.filter((s) => s === 201).length, 60);
     assert.equal(statuses.at(-1), 429);
     const limited = await srv.call('POST', url, { answers: VALID, submissionId: randomUUID() });
     assert.equal(limited.json.error.code, 'RATE_LIMITED');
@@ -526,6 +527,90 @@ describe('forms API', () => {
 
   test('answers unsupported methods on existing routes with 405', async () => {
     assert.equal((await fetch(`${srv.base}/api/forms`, { method: 'PATCH' })).status, 405);
+  });
+
+  test('a per-form cap still applies when X-Forwarded-For is spoofed', async () => {
+    const form = await createPublished();
+    const url = `${srv.base}/api/public/forms/${form.publicId}/responses`;
+    const send = (i: number) => fetch(url, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', 'x-forwarded-for': `9.9.${i >> 8}.${i & 255}` },
+      body: JSON.stringify({ answers: VALID, submissionId: randomUUID() }),
+    }).then((r) => r.status);
+    const statuses: number[] = [];
+    for (let batch = 0; batch < 12; batch++) {
+      statuses.push(...(await Promise.all(Array.from({ length: 50 }, (_, j) => send(batch * 50 + j)))));
+    }
+    assert.equal(statuses.filter((st) => st === 201).length, 600);
+    assert.equal(await send(999), 429);
+  }, 60_000);
+
+  test('sends security headers and hides X-Powered-By', async () => {
+    for (const url of ['/admin', '/f/abcdef1234', '/api/forms']) {
+      const r = await fetch(`${srv.base}${url}`);
+      assert.equal(r.headers.get('x-frame-options'), 'DENY', url);
+      assert.match(r.headers.get('content-security-policy') ?? '', /frame-ancestors 'none'/, url);
+      assert.equal(r.headers.get('x-content-type-options'), 'nosniff', url);
+      assert.ok(r.headers.get('referrer-policy'), url);
+      assert.equal(r.headers.get('x-powered-by'), null, url);
+    }
+  });
+
+  test('admin API rejects DNS-rebinding hosts but allows localhost and IP literals', async () => {
+    const get = (host: string, headers: Record<string, string> = {}) =>
+      new Promise<number>((resolve, reject) => {
+        const req = http.request(
+          { host: '127.0.0.1', port: srv.port, path: '/api/forms', method: 'GET', headers: { host, ...headers } },
+          (res) => { res.resume(); resolve(res.statusCode ?? 0); },
+        );
+        req.on('error', reject);
+        req.end();
+      });
+    assert.equal(await get('evil.example'), 403);
+    assert.equal(await get(`evil.example:${srv.port}`), 403);
+    assert.equal(await get(`localhost:${srv.port}`), 200);
+    assert.equal(await get(`127.0.0.1:${srv.port}`), 200);
+    assert.equal(await get(`192.168.1.20:${srv.port}`), 200, 'LAN access for phone testing');
+    assert.equal(await get(`[::1]:${srv.port}`), 200);
+  });
+
+  test('a spoofed X-Forwarded-Host does not satisfy the Origin check', async () => {
+    const created = await srv.call('POST', '/api/forms', { title: 'XFH' });
+    const r = await fetch(`${srv.base}/api/forms/${created.json.form.id}`, {
+      method: 'DELETE', headers: { origin: 'http://evil.example', 'x-forwarded-host': 'evil.example' },
+    });
+    assert.equal(r.status, 403);
+  });
+
+  test('publish/unpublish with a stale version are rejected with 409', async () => {
+    const created = await srv.call('POST', '/api/forms', { title: 'Устаревшая вкладка', fields: FIELDS });
+    const { id } = created.json.form;
+    await srv.call('PUT', `/api/forms/${id}`, { title: 'Новее', fields: FIELDS, version: 1 });
+    const stale = await srv.call('POST', `/api/forms/${id}/publish`, { version: 1 });
+    assert.equal(stale.status, 409);
+    assert.equal(stale.json.error.code, 'VERSION_CONFLICT');
+    assert.equal((await srv.call('POST', `/api/forms/${id}/publish`, { version: 2 })).status, 200);
+    assert.equal((await srv.call('POST', `/api/forms/${id}/unpublish`, { version: 1 })).status, 409);
+  });
+
+  test('re-publishing an already published form keeps publishedAt', async () => {
+    const form = await createPublished();
+    const again = (await srv.call('POST', `/api/forms/${form.id}/publish`)).json.form;
+    assert.equal(again.publishedAt, form.publishedAt);
+  });
+
+  test('GET /api/forms/:id reports responseCount', async () => {
+    const form = await createPublished();
+    await srv.call('POST', `/api/public/forms/${form.publicId}/responses`, { answers: VALID, submissionId: randomUUID() });
+    assert.equal((await srv.call('GET', `/api/forms/${form.id}`)).json.responseCount, 1);
+  });
+
+  test('submissionId is case-insensitive for idempotency', async () => {
+    const form = await createPublished();
+    const id = randomUUID();
+    const url = `/api/public/forms/${form.publicId}/responses`;
+    assert.equal((await srv.call('POST', url, { answers: VALID, submissionId: id })).status, 201);
+    assert.equal((await srv.call('POST', url, { answers: VALID, submissionId: id.toUpperCase() })).status, 200);
   });
 
   test('serves the admin and public pages and returns HTML 404 for unknown pages', async () => {

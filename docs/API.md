@@ -11,13 +11,14 @@
 | 400 | `INVALID_JSON` | Тело запроса — не JSON / не объект |
 | 400 | `VALIDATION_ERROR` | Ошибки валидации; `fields` — карта ошибок |
 | 403 | `FORM_NOT_PUBLISHED` | Публичное обращение к неопубликованной форме |
-| 403 | `FORBIDDEN_ORIGIN` | Изменение через админ-API с чужого сайта (заголовок `Origin` не совпадает с хостом) |
+| 403 | `FORBIDDEN_ORIGIN` | Изменение через админ-API с чужого сайта (заголовок `Origin` не совпадает с `Host`) |
+| 403 | `FORBIDDEN_HOST` | Админка/админ-API открыты по неизвестному имени хоста (защита от DNS rebinding): разрешены `localhost`, IP-адреса и `ALLOWED_HOSTS` |
 | 404 | `NOT_FOUND` | Неизвестный id / publicId / маршрут API |
 | 409 | `VERSION_CONFLICT` | `PUT` с устаревшей `version` (форму уже сохранили в другой вкладке) |
 | 409 | `FORM_CHANGED` | Студент отправляет ответ на устаревшую версию формы; в ответе `form` — актуальная публичная форма |
 | 405 | — | Метод не поддерживается существующим маршрутом (ответ Next.js без тела) |
 | 413 | `PAYLOAD_TOO_LARGE` | Тело больше 200 КБ (проверяется потоково, в т.ч. для chunked) |
-| 429 | `RATE_LIMITED` | Больше 30 отправок или 600 событий в минуту с одного IP на форму |
+| 429 | `RATE_LIMITED` | Лимиты в минуту на форму: отправки — 60 с одного IP и 600 всего; события — 600 с IP и 6000 всего; создание форм — 60 с IP |
 | 429 | `RESPONSE_LIMIT` | У формы уже 10 000 ответов |
 | 500 | `INTERNAL` | Непредвиденная ошибка |
 
@@ -65,16 +66,17 @@ checkbox — `boolean`. Необязательное незаполненное 
 
 ## Админ API (без авторизации)
 
-- `GET /api/forms` → `{ forms: FormSummary[] }`, где
+- `GET /api/forms` → `{ forms: FormSummary[], storage? }`, где `storage.recoveredFrom` — имя резервной копии, если при запуске файл данных оказался повреждённым и был отложен; иначе поля нет;
   `FormSummary = { id, publicId, title, description, status, fieldCount, responseCount, createdAt, updatedAt, publishedAt }`, сортировка по `updatedAt` убыв.
 - `POST /api/forms` body `{ title, description?, fields? }` → `201 { form }`
-- `GET /api/forms/:id` → `{ form }`
+- `GET /api/forms/:id` → `{ form, responseCount }`
 - `PUT /api/forms/:id` body `{ title, description, fields, version? }` (`fields` обязателен — без него `400`, чтобы случайно не стереть поля) → `{ form }` (полная замена содержимого, `version + 1`).
   Если передана `version` и она не совпадает с текущей → `409 VERSION_CONFLICT` (защита от перезаписи из другой вкладки).
   Ключи ошибок: `title`, `description`, `fields`, `fields.<index>.label`, `fields.<index>.options`, `fields.<index>.options.<j>`, `fields.<index>.min` и т.д.
   Поле без `id` получает сгенерированный id; так же для вариантов.
-- `POST /api/forms/:id/publish` → `{ form }`. Требует ≥1 поля, иначе `400 VALIDATION_ERROR` с ключом `fields`.
-- `POST /api/forms/:id/unpublish` → `{ form }`
+- `POST /api/forms/:id/publish` (тело необязательно: `{ version? }`) → `{ form }`. Требует ≥1 поля, иначе `400 VALIDATION_ERROR` с ключом `fields`.
+  Устаревшая `version` → `409 VERSION_CONFLICT`. Повторная публикация опубликованной формы ничего не меняет (`publishedAt` сохраняется).
+- `POST /api/forms/:id/unpublish` (тело необязательно: `{ version? }`) → `{ form }`
 - `DELETE /api/forms/:id` → `204` (удаляет форму, её ответы и аналитику)
 - `GET /api/forms/:id/responses` → `{ responses: ResponseView[], total }` (новые сверху), где
 
@@ -104,7 +106,8 @@ interface ResponseView {
   Ошибки: `400 VALIDATION_ERROR` (`fields: { [fieldId]: сообщение }`), `403`, `404`,
   `409 FORM_CHANGED` (передана `formVersion`, а менеджер успел изменить форму; тело содержит `form` — клиент перерисовывает форму, сохраняя введённые ответы).
   Повтор с тем же `submissionId` для той же формы → `200` с тем же ответом (идемпотентность, защита от двойной отправки); проверяется до остальных проверок.
-- `POST /api/public/forms/:publicId/events` body `{ sessionId: uuid, type: 'view' | 'start' | 'field', fieldId? }` → `204`.
+- `POST /api/public/forms/:publicId/events` body `{ sessionId: uuid, type: 'view' | 'start' | 'field', fieldId? }` → `204`;
+  `403 FORM_NOT_PUBLISHED`, `404`, `400` (неизвестный тип, поле или некорректный `sessionId`). Повторное событие не меняет данных и не пишется на диск.
 
 ## Аналитика
 

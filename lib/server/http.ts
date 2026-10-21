@@ -40,9 +40,18 @@ async function readLimitedText(request: Request): Promise<string> {
   return Buffer.concat(chunks).toString('utf8');
 }
 
+/** Like readJsonObject, but an empty body is allowed and reads as {}. */
+export async function readOptionalJsonObject(request: Request): Promise<Record<string, unknown>> {
+  const text = await readLimitedText(request);
+  return text.trim() === '' ? {} : parseJsonObject(text);
+}
+
 /** Reads a JSON object body with a size limit; anything else is a 4xx ApiError. */
 export async function readJsonObject(request: Request): Promise<Record<string, unknown>> {
-  const text = await readLimitedText(request);
+  return parseJsonObject(await readLimitedText(request));
+}
+
+function parseJsonObject(text: string): Record<string, unknown> {
   let parsed: unknown;
   try {
     parsed = JSON.parse(text);
@@ -65,7 +74,8 @@ const tooLarge = () =>
 export function assertSameOrigin(request: Request): void {
   const origin = request.headers.get('origin');
   if (!origin) return; // curl, tests and same-origin GETs
-  const host = request.headers.get('x-forwarded-host') ?? request.headers.get('host');
+  // Only the Host the browser connected to counts: X-Forwarded-Host is client-controlled without a proxy.
+  const host = request.headers.get('host');
   let originHost: string | null = null;
   try {
     originHost = new URL(origin).host;
@@ -78,21 +88,39 @@ export function assertSameOrigin(request: Request): void {
 }
 
 const buckets = new Map<string, { count: number; resetAt: number }>();
+const MAX_BUCKETS = 10_000;
+const WINDOW_MS = 60_000;
 
-/** Fixed-window in-memory rate limit per client key; generous enough for real students. */
-export function rateLimit(request: Request, scope: string, limit: number, windowMs = 60_000): void {
-  const ip = request.headers.get('x-forwarded-for')?.split(',')[0]?.trim() || 'local';
-  const key = `${scope}|${ip}`;
+/** Counts one hit in a fixed one-minute window; true when the key is over its limit. */
+function hit(key: string, limit: number): boolean {
   const t = Date.now();
-  if (buckets.size > 10_000) {
+  if (buckets.size >= MAX_BUCKETS) {
     for (const [k, b] of buckets) if (b.resetAt <= t) buckets.delete(k);
+    // Still full (e.g. a flood of spoofed keys): drop the oldest entries to bound memory.
+    for (const k of buckets.keys()) {
+      if (buckets.size < MAX_BUCKETS * 0.9) break;
+      buckets.delete(k);
+    }
   }
   const bucket = buckets.get(key);
   if (!bucket || bucket.resetAt <= t) {
-    buckets.set(key, { count: 1, resetAt: t + windowMs });
-    return;
+    buckets.set(key, { count: 1, resetAt: t + WINDOW_MS });
+    return false;
   }
-  if (++bucket.count > limit) {
+  return ++bucket.count > limit;
+}
+
+/**
+ * In-memory rate limit with two layers. `perClient` is keyed by the client address: `next start`
+ * fills X-Forwarded-For with the socket address, but keeps a client-supplied value, so this layer
+ * can be dodged by spoofing. `perScope` caps the scope as a whole (e.g. one form) regardless of
+ * who asks, which bounds abuse even then. Behind a reverse proxy, it must overwrite X-Forwarded-For.
+ */
+export function rateLimit(request: Request, scope: string, perClient: number, perScope: number): void {
+  const client = (request.headers.get('x-forwarded-for')?.split(',')[0]?.trim() || 'unknown').slice(0, 64);
+  const overScope = hit(scope, perScope);
+  const overClient = hit(`${scope}|${client}`, perClient);
+  if (overScope || overClient) {
     throw new ApiError(429, 'RATE_LIMITED', 'Слишком много запросов. Попробуйте через минуту.');
   }
 }

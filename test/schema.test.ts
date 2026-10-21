@@ -234,3 +234,16 @@ describe('hardening', () => {
     assert.ok(norm({ title: 'T', fields: [field({ type: 'number', min: '9'.repeat(400) })] }).errors['fields.0.min']);
   });
 });
+
+describe('isAllowedHost (DNS-rebinding guard)', async () => {
+  const { isAllowedHost } = await import('../lib/server/host');
+  test('accepts localhost, IP literals and ALLOWED_HOSTS, rejects other names', () => {
+    for (const h of ['localhost:3000', 'app.localhost', '127.0.0.1:3000', '192.168.0.5', '[::1]:3000']) {
+      assert.equal(isAllowedHost(h, ''), true, h);
+    }
+    for (const h of ['evil.example', 'evil.example:3000', 'localhost.evil.example', '', null]) {
+      assert.equal(isAllowedHost(h, ''), false, String(h));
+    }
+    assert.equal(isAllowedHost('forms.example.org', ' forms.example.org , other.org'), true);
+  });
+});
