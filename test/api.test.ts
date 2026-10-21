@@ -29,7 +29,7 @@ const VALID = { name: 'Анна', mail: 'anna@example.com', age: 21, track: 'be'
 describe('forms API', () => {
   let srv: TestServer;
   const dataDir = path.join(tmpRoot, 'main');
-  beforeAll(async () => { srv = await startServer(dataDir); });
+  beforeAll(async () => { srv = await startServer(dataDir); }, 60_000);
   afterAll(async () => { await srv?.close(); });
 
   async function createPublished(fields: unknown[] = FIELDS) {
@@ -409,6 +409,125 @@ describe('forms API', () => {
     const limited = await srv.call('POST', url, { answers: VALID, submissionId: randomUUID() });
     assert.equal(limited.json.error.code, 'RATE_LIMITED');
   });
+  test('a submission with an unseen sessionId keeps the funnel consistent', async () => {
+    const form = await createPublished();
+    await srv.call('POST', `/api/public/forms/${form.publicId}/responses`, {
+      answers: VALID, submissionId: randomUUID(), sessionId: randomUUID(),
+    });
+    const a = (await srv.call('GET', `/api/forms/${form.id}/analytics`)).json;
+    assert.deepEqual([a.views, a.starts, a.submissions, a.abandoned, a.completionRate], [1, 1, 1, 0, 1]);
+  });
+
+  test('submitting with the current formVersion succeeds', async () => {
+    const form = await createPublished();
+    const r = await srv.call('POST', `/api/public/forms/${form.publicId}/responses`, {
+      answers: VALID, submissionId: randomUUID(), formVersion: form.version,
+    });
+    assert.equal(r.status, 201);
+  });
+
+  test('enforces number min/max over HTTP', async () => {
+    const form = await createPublished();
+    const url = `/api/public/forms/${form.publicId}/responses`;
+    for (const age of [5, 100]) {
+      const r = await srv.call('POST', url, { answers: { ...VALID, age }, submissionId: randomUUID() });
+      assert.equal(r.status, 400, `age ${age}`);
+      assert.deepEqual(Object.keys(r.json.error.fields), ['age']);
+    }
+  });
+
+  test('publish lifecycle: publishedAt, unpublish, edits of a published form reach students', async () => {
+    const created = await srv.call('POST', '/api/forms', { title: 'Жизненный цикл', fields: FIELDS });
+    const { id, publicId } = created.json.form;
+    assert.equal(created.json.form.publishedAt, null);
+    const pub = (await srv.call('POST', `/api/forms/${id}/publish`)).json.form;
+    assert.equal(pub.status, 'published');
+    assert.ok(!Number.isNaN(Date.parse(pub.publishedAt)));
+
+    const put = await srv.call('PUT', `/api/forms/${id}`, { title: 'Жизненный цикл v2', fields: FIELDS.slice(0, 2) });
+    assert.equal(put.json.form.status, 'published', 'editing does not unpublish');
+    const seen = (await srv.call('GET', `/api/public/forms/${publicId}`)).json.form;
+    assert.equal(seen.title, 'Жизненный цикл v2');
+    assert.equal(seen.fields.length, 2);
+
+    const un = (await srv.call('POST', `/api/forms/${id}/unpublish`)).json.form;
+    assert.equal(un.status, 'draft');
+    assert.equal((await srv.call('GET', `/api/public/forms/${publicId}`)).status, 403);
+    const again = (await srv.call('POST', `/api/forms/${id}/publish`)).json.form;
+    assert.equal(again.status, 'published');
+    assert.equal(again.publicId, publicId, 'the link survives republishing');
+  });
+
+  test('returns indexed validation keys for min/max and option labels', async () => {
+    const created = await srv.call('POST', '/api/forms', { title: 'Ключи' });
+    const r = await srv.call('PUT', `/api/forms/${created.json.form.id}`, {
+      title: 'Ключи',
+      fields: [
+        { type: 'number', label: 'Возраст', min: 'abc' },
+        { type: 'radio', label: 'Курс', options: [{ label: 'Первый' }, { label: 'первый' }] },
+      ],
+    });
+    assert.equal(r.status, 400);
+    assert.ok(r.json.error.fields['fields.0.min']);
+    assert.ok(r.json.error.fields['fields.1.options.1']);
+  });
+
+  test('CSV escapes separators, quotes and newlines and renders every value type', async () => {
+    const form = await createPublished();
+    await srv.call('POST', `/api/public/forms/${form.publicId}/responses`, {
+      answers: { ...VALID, name: 'Иванова; Анна "Ann"\nвторая строка', skills: ['js', 'sql'], age: undefined },
+      submissionId: randomUUID(),
+    });
+    const r = await srv.call('GET', `/api/forms/${form.id}/responses/csv`);
+    assert.match(r.headers.get('content-disposition') ?? '', new RegExp(`filename="responses-${form.publicId}\\.csv"`));
+    const body = r.text.trim();
+    assert.ok(body.includes('"Иванова; Анна ""Ann""\nвторая строка"'), 'quoted multi-line cell');
+    assert.ok(body.includes(';JavaScript, SQL;'), 'multi_select labels');
+    assert.ok(body.endsWith(';Да'), 'checkbox rendered as Да');
+    assert.ok(body.includes('anna@example.com;;Backend'), 'empty optional cell stays empty');
+  });
+
+  test('repeated field events do not inflate counts; drop-off follows the latest field started', async () => {
+    const form = await createPublished();
+    const ev = (sessionId: string, type: string, fieldId?: string) =>
+      srv.call('POST', `/api/public/forms/${form.publicId}/events`, { sessionId, type, fieldId });
+    const s = randomUUID();
+    await ev(s, 'view'); await ev(s, 'start');
+    await ev(s, 'field', 'mail'); await ev(s, 'field', 'name'); await ev(s, 'field', 'mail');
+    const a = (await srv.call('GET', `/api/forms/${form.id}/analytics`)).json;
+    const byId = Object.fromEntries(a.fields.map((f: any) => [f.fieldId, f]));
+    assert.equal(byId.mail.filled, 1);
+    assert.equal(byId.name.lastBeforeAbandon, 1);
+    assert.equal(byId.mail.lastBeforeAbandon, 0);
+  });
+
+  test('rate-limits analytics events per form (600/min)', async () => {
+    const form = await createPublished();
+    const url = `${srv.base}/api/public/forms/${form.publicId}/events`;
+    const send = () => fetch(url, {
+      method: 'POST', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ sessionId: randomUUID(), type: 'view' }),
+    }).then((r) => r.status);
+    const statuses: number[] = [];
+    for (let batch = 0; batch < 6; batch++) statuses.push(...(await Promise.all(Array.from({ length: 100 }, send))));
+    assert.ok(statuses.every((st) => st === 204));
+    assert.equal(await send(), 429);
+  });
+
+  test('ignores prototype-polluting answer keys', async () => {
+    const form = await createPublished();
+    const raw = `{"answers":{"__proto__":{"polluted":true},"name":"Анна","mail":"a@b.co","track":"fe","agree":true},"submissionId":"${randomUUID()}"}`;
+    const r = await srv.call('POST', `/api/public/forms/${form.publicId}/responses`, raw, { raw: true });
+    assert.equal(r.status, 201);
+    const list = await srv.call('GET', `/api/forms/${form.id}/responses`);
+    assert.equal(list.json.responses[0].items.some((i: any) => i.fieldId === '__proto__'), false);
+    assert.equal(({} as any).polluted, undefined);
+  });
+
+  test('answers unsupported methods on existing routes with 405', async () => {
+    assert.equal((await fetch(`${srv.base}/api/forms`, { method: 'PATCH' })).status, 405);
+  });
+
   test('serves the admin and public pages and returns HTML 404 for unknown pages', async () => {
     for (const url of ['/admin', '/f/abcdef1234']) {
       const r = await srv.call('GET', url);
