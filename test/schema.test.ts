@@ -1,4 +1,4 @@
-import { test, describe } from 'node:test';
+import { test, describe } from 'vitest';
 import assert from 'node:assert/strict';
 import {
   FIELD_TYPES,
@@ -6,12 +6,19 @@ import {
   normalizeFormInput,
   validateAnswers,
   formatValue,
-} from '../shared/schema.js';
+  generateUuid,
+  type Field,
+} from '../lib/schema';
 
-const field = (overrides) => ({
+// Inputs are deliberately loose: the tests feed invalid data on purpose.
+const field = (overrides: Record<string, unknown> = {}): Field => ({
   id: 'f1', type: 'short_text', label: 'Имя', hint: '', placeholder: '',
   required: false, options: [], min: null, max: null, ...overrides,
-});
+}) as Field;
+const norm = (input: unknown) => {
+  const r = normalizeFormInput(input);
+  return { value: r.value!, errors: r.errors };
+};
 const opts = [{ id: 'a', label: 'Альфа' }, { id: 'b', label: 'Бета' }];
 
 describe('FIELD_TYPES / createField', () => {
@@ -25,7 +32,7 @@ describe('FIELD_TYPES / createField', () => {
   test('createField makes a valid field with options for choice types', () => {
     for (const { type } of FIELD_TYPES) {
       const f = createField(type);
-      const { errors } = normalizeFormInput({ title: 'T', fields: [f] });
+      const { errors } = norm({ title: 'T', fields: [f] });
       assert.deepEqual(errors, {}, `type ${type}`);
       if (['select', 'radio', 'multi_select'].includes(type)) assert.ok(f.options.length >= 2);
     }
@@ -34,8 +41,8 @@ describe('FIELD_TYPES / createField', () => {
 
 describe('normalizeFormInput', () => {
   test('requires a title and trims strings', () => {
-    assert.ok(normalizeFormInput({ title: '   ' }).errors.title);
-    const { value, errors } = normalizeFormInput({ title: '  Стажировка  ', description: ' d ' });
+    assert.ok(norm({ title: '   ' }).errors.title);
+    const { value, errors } = norm({ title: '  Стажировка  ', description: ' d ' });
     assert.deepEqual(errors, {});
     assert.equal(value.title, 'Стажировка');
     assert.equal(value.description, 'd');
@@ -43,12 +50,12 @@ describe('normalizeFormInput', () => {
   });
 
   test('rejects non-object input and non-array fields', () => {
-    assert.ok(normalizeFormInput(null).errors._root);
-    assert.ok(normalizeFormInput({ title: 'T', fields: 'x' }).errors.fields);
+    assert.ok(norm(null).errors._root);
+    assert.ok(norm({ title: 'T', fields: 'x' }).errors.fields);
   });
 
   test('rejects unknown field type and empty label with indexed keys', () => {
-    const { errors } = normalizeFormInput({
+    const { errors } = norm({
       title: 'T',
       fields: [field({ type: 'weird' }), field({ id: 'f2', label: '' })],
     });
@@ -57,19 +64,19 @@ describe('normalizeFormInput', () => {
   });
 
   test('choice fields need at least one option and unique option labels', () => {
-    let r = normalizeFormInput({ title: 'T', fields: [field({ type: 'select', options: [] })] });
+    let r = norm({ title: 'T', fields: [field({ type: 'select', options: [] })] });
     assert.ok(r.errors['fields.0.options']);
-    r = normalizeFormInput({
+    r = norm({
       title: 'T',
       fields: [field({ type: 'radio', options: [{ id: 'a', label: 'X' }, { id: 'b', label: ' x ' }] })],
     });
     assert.ok(r.errors['fields.0.options.1']);
-    r = normalizeFormInput({ title: 'T', fields: [field({ type: 'radio', options: [{ id: 'a', label: '' }] })] });
+    r = norm({ title: 'T', fields: [field({ type: 'radio', options: [{ id: 'a', label: '' }] })] });
     assert.ok(r.errors['fields.0.options.0']);
   });
 
   test('generates missing / invalid ids and dedupes field ids', () => {
-    const { value, errors } = normalizeFormInput({
+    const { value, errors } = norm({
       title: 'T',
       fields: [
         field({ id: undefined }),
@@ -87,7 +94,7 @@ describe('normalizeFormInput', () => {
   });
 
   test('strips options from non-choice fields and min/max from non-number fields', () => {
-    const { value } = normalizeFormInput({
+    const { value } = norm({
       title: 'T',
       fields: [field({ options: opts, min: 1, max: 2 })],
     });
@@ -96,16 +103,16 @@ describe('normalizeFormInput', () => {
   });
 
   test('validates number min <= max', () => {
-    const r = normalizeFormInput({ title: 'T', fields: [field({ type: 'number', min: 10, max: 1 })] });
+    const r = norm({ title: 'T', fields: [field({ type: 'number', min: 10, max: 1 })] });
     assert.ok(r.errors['fields.0.max']);
-    const ok = normalizeFormInput({ title: 'T', fields: [field({ type: 'number', min: '1', max: '' })] });
+    const ok = norm({ title: 'T', fields: [field({ type: 'number', min: '1', max: '' })] });
     assert.deepEqual(ok.errors, {});
     assert.equal(ok.value.fields[0].min, 1);
     assert.equal(ok.value.fields[0].max, null);
   });
 
   test('enforces length limits', () => {
-    const r = normalizeFormInput({ title: 'x'.repeat(201), fields: [field({ label: 'y'.repeat(301) })] });
+    const r = norm({ title: 'x'.repeat(201), fields: [field({ label: 'y'.repeat(301) })] });
     assert.ok(r.errors.title);
     assert.ok(r.errors['fields.0.label']);
   });
@@ -196,5 +203,28 @@ describe('formatValue', () => {
     assert.equal(formatValue(field({ type: 'date' }), '2026-03-01'), '01.03.2026');
     assert.equal(formatValue(field({}), undefined), '—');
     assert.equal(formatValue(field({ type: 'select', options: opts }), 'gone'), 'gone');
+  });
+});
+
+describe('hardening', () => {
+  test('reserved object keys are never used as ids', () => {
+    const { value } = norm({
+      title: 'T',
+      fields: [field({ id: '__proto__' }), field({ id: 'constructor' })],
+    });
+    assert.ok(value!.fields.every((f) => !['__proto__', 'constructor', 'prototype'].includes(f.id)));
+  });
+
+  test('stricter email and phone formats', () => {
+    const fields = [field({ id: 'm', type: 'email' }), field({ id: 'p', type: 'phone' })];
+    assert.ok(validateAnswers(fields, { m: 'a@b..cc', p: '+++1234567' }).errors.m);
+    assert.ok(validateAnswers(fields, { m: 'a@b..cc', p: '+++1234567' }).errors.p);
+    assert.deepEqual(validateAnswers(fields, { m: 'first.last@uni.edu.ru', p: '8 800 555-35-35' }).errors, {});
+  });
+
+  test('generateUuid returns RFC 4122 v4 ids without crypto.randomUUID', () => {
+    const ids = new Set(Array.from({ length: 50 }, () => generateUuid()));
+    assert.equal(ids.size, 50);
+    for (const id of ids) assert.match(id, /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/);
   });
 });

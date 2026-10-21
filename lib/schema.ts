@@ -2,7 +2,54 @@
 // Used by both the server (authoritative) and the browser (instant feedback), so it must
 // stay free of Node- or DOM-specific imports.
 
-export const FIELD_TYPES = [
+export type FieldType =
+  | 'short_text'
+  | 'long_text'
+  | 'email'
+  | 'phone'
+  | 'number'
+  | 'select'
+  | 'radio'
+  | 'multi_select'
+  | 'date'
+  | 'checkbox';
+
+export interface Option {
+  id: string;
+  label: string;
+}
+
+export interface Field {
+  id: string;
+  type: FieldType;
+  label: string;
+  hint: string;
+  placeholder: string;
+  required: boolean;
+  options: Option[];
+  min: number | null;
+  max: number | null;
+}
+
+export interface FormContent {
+  title: string;
+  description: string;
+  fields: Field[];
+}
+
+export type AnswerValue = string | number | boolean | string[];
+export type Answers = Record<string, AnswerValue>;
+export type ErrorMap = Record<string, string>;
+
+interface FieldTypeMeta {
+  type: FieldType;
+  label: string;
+  icon: string;
+  placeholder?: boolean;
+  choice?: boolean;
+}
+
+export const FIELD_TYPES: readonly FieldTypeMeta[] = [
   { type: 'short_text', label: 'Короткий текст', icon: 'Aa', placeholder: true },
   { type: 'long_text', label: 'Длинный текст', icon: '¶', placeholder: true },
   { type: 'email', label: 'Email', icon: '@', placeholder: true },
@@ -15,10 +62,11 @@ export const FIELD_TYPES = [
   { type: 'checkbox', label: 'Флажок (согласие)', icon: '✓' },
 ];
 
-const TYPE_MAP = new Map(FIELD_TYPES.map((t) => [t.type, t]));
-export const isChoiceType = (type) => Boolean(TYPE_MAP.get(type)?.choice);
-export const hasPlaceholder = (type) => Boolean(TYPE_MAP.get(type)?.placeholder);
-export const fieldTypeLabel = (type) => TYPE_MAP.get(type)?.label ?? type;
+const TYPE_MAP = new Map<string, FieldTypeMeta>(FIELD_TYPES.map((t) => [t.type, t]));
+export const isChoiceType = (type: string) => Boolean(TYPE_MAP.get(type)?.choice);
+export const hasPlaceholder = (type: string) => Boolean(TYPE_MAP.get(type)?.placeholder);
+export const fieldTypeLabel = (type: string) => TYPE_MAP.get(type)?.label ?? type;
+export const fieldTypeIcon = (type: string) => TYPE_MAP.get(type)?.icon ?? '?';
 
 export const LIMITS = {
   title: 200,
@@ -33,15 +81,19 @@ export const LIMITS = {
   long_text: 5000,
   email: 254,
   phone: 30,
-};
+} as const;
 
 const ID_RE = /^[A-Za-z0-9_-]{1,64}$/;
-const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/;
-const PHONE_RE = /^[+\d\s()-]+$/;
+const RESERVED_IDS = new Set(['__proto__', 'constructor', 'prototype']);
+const EMAIL_RE = /^[^\s@]+@[^\s@.]+(\.[^\s@.]+)*\.[^\s@.]{2,}$/;
+const PHONE_RE = /^\+?[\d\s()-]+$/;
 const DATE_RE = /^(\d{4})-(\d{2})-(\d{2})$/;
 const NUMERIC_RE = /^-?\d+([.,]\d+)?$/;
+export const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
-export function generateId(length = 10) {
+const isValidId = (v: unknown): v is string => typeof v === 'string' && ID_RE.test(v) && !RESERVED_IDS.has(v);
+
+export function generateId(length = 10): string {
   const alphabet = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789';
   const bytes = new Uint8Array(length);
   globalThis.crypto.getRandomValues(bytes);
@@ -50,18 +102,29 @@ export function generateId(length = 10) {
   return out;
 }
 
-const isPlainObject = (v) => v !== null && typeof v === 'object' && !Array.isArray(v);
-const str = (v) => (typeof v === 'string' ? v.trim() : '');
+/** UUID v4 built on getRandomValues: crypto.randomUUID is missing on plain-HTTP non-localhost origins. */
+export function generateUuid(): string {
+  const b = new Uint8Array(16);
+  globalThis.crypto.getRandomValues(b);
+  b[6] = (b[6] & 0x0f) | 0x40;
+  b[8] = (b[8] & 0x3f) | 0x80;
+  const hex = Array.from(b, (x) => x.toString(16).padStart(2, '0')).join('');
+  return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`;
+}
 
-function toNumberOrNull(v) {
+const isPlainObject = (v: unknown): v is Record<string, unknown> =>
+  v !== null && typeof v === 'object' && !Array.isArray(v);
+const str = (v: unknown) => (typeof v === 'string' ? v.trim() : '');
+
+function toNumberOrNull(v: unknown): number | null {
   if (v === null || v === undefined || v === '') return null;
   if (typeof v === 'number') return Number.isFinite(v) ? v : NaN;
   if (typeof v === 'string' && NUMERIC_RE.test(v.trim())) return Number(v.trim().replace(',', '.'));
   return NaN;
 }
 
-export function createField(type = 'short_text') {
-  const meta = TYPE_MAP.get(type) ?? TYPE_MAP.get('short_text');
+export function createField(type: FieldType = 'short_text'): Field {
+  const meta = TYPE_MAP.get(type) ?? TYPE_MAP.get('short_text')!;
   return {
     id: generateId(),
     type: meta.type,
@@ -70,7 +133,10 @@ export function createField(type = 'short_text') {
     placeholder: '',
     required: false,
     options: meta.choice
-      ? [{ id: generateId(), label: 'Вариант 1' }, { id: generateId(), label: 'Вариант 2' }]
+      ? [
+          { id: generateId(), label: 'Вариант 1' },
+          { id: generateId(), label: 'Вариант 2' },
+        ]
       : [],
     min: null,
     max: null,
@@ -79,10 +145,10 @@ export function createField(type = 'short_text') {
 
 /**
  * Validates and normalizes a form definition coming from the admin UI.
- * Returns { value, errors } where errors is a flat map keyed like "fields.2.label".
+ * Errors are a flat map keyed like "fields.2.label"; `value` is null only for a non-object input.
  */
-export function normalizeFormInput(input) {
-  const errors = {};
+export function normalizeFormInput(input: unknown): { value: FormContent | null; errors: ErrorMap } {
+  const errors: ErrorMap = {};
   if (!isPlainObject(input)) {
     return { value: null, errors: { _root: 'Ожидался объект формы' } };
   }
@@ -94,27 +160,27 @@ export function normalizeFormInput(input) {
   const description = str(input.description);
   if (description.length > LIMITS.description) errors.description = `Не длиннее ${LIMITS.description} символов`;
 
-  let rawFields = input.fields ?? [];
-  if (!Array.isArray(rawFields)) {
+  let rawFields: unknown[] = [];
+  if (input.fields !== undefined && !Array.isArray(input.fields)) {
     errors.fields = 'Список полей должен быть массивом';
-    rawFields = [];
-  } else if (rawFields.length > LIMITS.fields) {
+  } else if (Array.isArray(input.fields) && input.fields.length > LIMITS.fields) {
     errors.fields = `Не больше ${LIMITS.fields} полей`;
-    rawFields = [];
+  } else if (Array.isArray(input.fields)) {
+    rawFields = input.fields;
   }
 
-  const usedIds = new Set();
-  const uniqueId = (candidate) => {
-    let id = typeof candidate === 'string' && ID_RE.test(candidate) ? candidate : generateId();
+  const usedIds = new Set<string>();
+  const uniqueId = (candidate: unknown) => {
+    let id = isValidId(candidate) ? candidate : generateId();
     while (usedIds.has(id)) id = generateId();
     usedIds.add(id);
     return id;
   };
 
-  const fields = rawFields.map((raw, i) => {
+  const fields = rawFields.map((raw, i): Field => {
     const key = `fields.${i}`;
     const f = isPlainObject(raw) ? raw : {};
-    const meta = TYPE_MAP.get(f.type);
+    const meta = TYPE_MAP.get(String(f.type));
     if (!meta) errors[`${key}.type`] = 'Неизвестный тип поля';
 
     const label = str(f.label);
@@ -125,32 +191,35 @@ export function normalizeFormInput(input) {
     if (hint.length > LIMITS.hint) errors[`${key}.hint`] = `Не длиннее ${LIMITS.hint} символов`;
 
     const placeholder = meta?.placeholder ? str(f.placeholder) : '';
-    if (placeholder.length > LIMITS.placeholder) errors[`${key}.placeholder`] = `Не длиннее ${LIMITS.placeholder} символов`;
+    if (placeholder.length > LIMITS.placeholder) {
+      errors[`${key}.placeholder`] = `Не длиннее ${LIMITS.placeholder} символов`;
+    }
 
-    let options = [];
+    let options: Option[] = [];
     if (meta?.choice) {
-      const rawOptions = Array.isArray(f.options) ? f.options : [];
+      const rawOptions: unknown[] = Array.isArray(f.options) ? f.options : [];
       if (rawOptions.length === 0) errors[`${key}.options`] = 'Добавьте хотя бы один вариант';
       else if (rawOptions.length > LIMITS.options) errors[`${key}.options`] = `Не больше ${LIMITS.options} вариантов`;
-      const seenLabels = new Set();
-      const optionIds = new Set();
+      const seenLabels = new Set<string>();
+      const optionIds = new Set<string>();
       options = rawOptions.slice(0, LIMITS.options).map((o, j) => {
         const opt = isPlainObject(o) ? o : {};
         const optLabel = str(opt.label);
         const lower = optLabel.toLowerCase();
         if (!optLabel) errors[`${key}.options.${j}`] = 'Вариант не может быть пустым';
-        else if (optLabel.length > LIMITS.optionLabel) errors[`${key}.options.${j}`] = `Не длиннее ${LIMITS.optionLabel} символов`;
-        else if (seenLabels.has(lower)) errors[`${key}.options.${j}`] = 'Такой вариант уже есть';
+        else if (optLabel.length > LIMITS.optionLabel) {
+          errors[`${key}.options.${j}`] = `Не длиннее ${LIMITS.optionLabel} символов`;
+        } else if (seenLabels.has(lower)) errors[`${key}.options.${j}`] = 'Такой вариант уже есть';
         seenLabels.add(lower);
-        let id = typeof opt.id === 'string' && ID_RE.test(opt.id) ? opt.id : generateId();
+        let id = isValidId(opt.id) ? opt.id : generateId();
         while (optionIds.has(id)) id = generateId();
         optionIds.add(id);
         return { id, label: optLabel };
       });
     }
 
-    let min = null;
-    let max = null;
+    let min: number | null = null;
+    let max: number | null = null;
     if (meta?.type === 'number') {
       min = toNumberOrNull(f.min);
       max = toNumberOrNull(f.max);
@@ -163,7 +232,7 @@ export function normalizeFormInput(input) {
 
     return {
       id: uniqueId(f.id),
-      type: meta ? meta.type : String(f.type ?? ''),
+      type: (meta?.type ?? String(f.type ?? '')) as FieldType,
       label,
       hint,
       placeholder,
@@ -177,11 +246,18 @@ export function normalizeFormInput(input) {
   return { value: { title, description, fields }, errors };
 }
 
-function isEmptyAnswer(v) {
-  return v === undefined || v === null || (typeof v === 'string' && v.trim() === '') || (Array.isArray(v) && v.length === 0);
+function isEmptyAnswer(v: unknown) {
+  return (
+    v === undefined ||
+    v === null ||
+    (typeof v === 'string' && v.trim() === '') ||
+    (Array.isArray(v) && v.length === 0)
+  );
 }
 
-function validateOne(field, raw) {
+type OneResult = { value: AnswerValue; error?: undefined } | { value?: undefined; error: string };
+
+function validateOne(field: Field, raw: unknown): OneResult {
   switch (field.type) {
     case 'short_text':
     case 'long_text': {
@@ -194,7 +270,9 @@ function validateOne(field, raw) {
     case 'email': {
       if (typeof raw !== 'string') return { error: 'Ожидался email' };
       const v = raw.trim();
-      if (v.length > LIMITS.email || !EMAIL_RE.test(v)) return { error: 'Введите корректный email, например name@example.com' };
+      if (v.length > LIMITS.email || !EMAIL_RE.test(v)) {
+        return { error: 'Введите корректный email, например name@example.com' };
+      }
       return { value: v };
     }
     case 'phone': {
@@ -209,20 +287,23 @@ function validateOne(field, raw) {
     case 'number': {
       const n = toNumberOrNull(raw);
       if (n === null || Number.isNaN(n)) return { error: 'Введите число' };
-      if (field.min !== null && field.min !== undefined && n < field.min) return { error: `Не меньше ${field.min}` };
-      if (field.max !== null && field.max !== undefined && n > field.max) return { error: `Не больше ${field.max}` };
+      if (field.min !== null && n < field.min) return { error: `Не меньше ${field.min}` };
+      if (field.max !== null && n > field.max) return { error: `Не больше ${field.max}` };
       return { value: n };
     }
     case 'select':
     case 'radio': {
-      if (typeof raw !== 'string' || !field.options.some((o) => o.id === raw)) return { error: 'Выберите вариант из списка' };
+      if (typeof raw !== 'string' || !field.options.some((o) => o.id === raw)) {
+        return { error: 'Выберите вариант из списка' };
+      }
       return { value: raw };
     }
     case 'multi_select': {
-      if (!Array.isArray(raw)) return { error: 'Выберите варианты из списка' };
       const allowed = new Set(field.options.map((o) => o.id));
-      if (!raw.every((v) => typeof v === 'string' && allowed.has(v))) return { error: 'Выберите варианты из списка' };
-      const picked = new Set(raw);
+      if (!Array.isArray(raw) || raw.length > allowed.size * 2 || !raw.every((v) => typeof v === 'string' && allowed.has(v))) {
+        return { error: 'Выберите варианты из списка' };
+      }
+      const picked = new Set<string>(raw);
       // Keep the manager-defined option order, drop duplicates.
       return { value: field.options.map((o) => o.id).filter((id) => picked.has(id)) };
     }
@@ -234,7 +315,7 @@ function validateOne(field, raw) {
       if (dt.getUTCFullYear() !== y || dt.getUTCMonth() !== mo - 1 || dt.getUTCDate() !== d || y < 1900 || y > 2100) {
         return { error: 'Такой даты не существует' };
       }
-      return { value: raw.trim() };
+      return { value: m[0] };
     }
     case 'checkbox': {
       if (typeof raw !== 'boolean') return { error: 'Некорректное значение' };
@@ -249,10 +330,10 @@ function validateOne(field, raw) {
  * Validates answers against the form fields. Unknown keys are dropped,
  * empty optional answers are omitted. Returns { values, errors } keyed by field id.
  */
-export function validateAnswers(fields, answers) {
+export function validateAnswers(fields: Field[], answers: unknown): { values: Answers; errors: ErrorMap } {
   const input = isPlainObject(answers) ? answers : {};
-  const values = {};
-  const errors = {};
+  const values: Answers = {};
+  const errors: ErrorMap = {};
   for (const field of fields) {
     const raw = Object.prototype.hasOwnProperty.call(input, field.id) ? input[field.id] : undefined;
     const uncheckedBox = field.type === 'checkbox' && raw === false;
@@ -264,17 +345,19 @@ export function validateAnswers(fields, answers) {
       }
       continue;
     }
-    const { value, error } = validateOne(field, raw);
-    if (error) errors[field.id] = error;
-    else values[field.id] = value;
+    const result = validateOne(field, raw);
+    if (result.error !== undefined) errors[field.id] = result.error;
+    else values[field.id] = result.value;
   }
   return { values, errors };
 }
 
 /** Human-readable representation of a stored answer value. */
-export function formatValue(field, value) {
-  if (value === undefined || value === null || value === '' || (Array.isArray(value) && value.length === 0)) return '—';
-  const labelOf = (id) => field.options?.find((o) => o.id === id)?.label ?? String(id);
+export function formatValue(field: Pick<Field, 'type' | 'options'>, value: unknown): string {
+  if (value === undefined || value === null || value === '' || (Array.isArray(value) && value.length === 0)) {
+    return '—';
+  }
+  const labelOf = (id: unknown) => field.options?.find((o) => o.id === id)?.label ?? String(id);
   switch (field.type) {
     case 'select':
     case 'radio':

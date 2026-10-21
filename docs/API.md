@@ -12,6 +12,8 @@
 | 400 | `VALIDATION_ERROR` | Ошибки валидации; `fields` — карта ошибок |
 | 403 | `FORM_NOT_PUBLISHED` | Публичное обращение к неопубликованной форме |
 | 404 | `NOT_FOUND` | Неизвестный id / publicId / маршрут API |
+| 409 | `VERSION_CONFLICT` | `PUT` с устаревшей `version` (форму уже сохранили в другой вкладке) |
+| 409 | `FORM_CHANGED` | Студент отправляет ответ на устаревшую версию формы; в ответе `form` — актуальная публичная форма |
 | 413 | `PAYLOAD_TOO_LARGE` | Тело больше 200 КБ |
 | 500 | `INTERNAL` | Непредвиденная ошибка |
 
@@ -63,7 +65,8 @@ checkbox — `boolean`. Необязательное незаполненное 
   `FormSummary = { id, publicId, title, description, status, fieldCount, responseCount, createdAt, updatedAt, publishedAt }`, сортировка по `updatedAt` убыв.
 - `POST /api/forms` body `{ title, description?, fields? }` → `201 { form }`
 - `GET /api/forms/:id` → `{ form }`
-- `PUT /api/forms/:id` body `{ title, description, fields }` → `{ form }` (полная замена содержимого, `version + 1`).
+- `PUT /api/forms/:id` body `{ title, description, fields, version? }` → `{ form }` (полная замена содержимого, `version + 1`).
+  Если передана `version` и она не совпадает с текущей → `409 VERSION_CONFLICT` (защита от перезаписи из другой вкладки).
   Ключи ошибок: `title`, `description`, `fields`, `fields.<index>.label`, `fields.<index>.options`, `fields.<index>.options.<j>`, `fields.<index>.min` и т.д.
   Поле без `id` получает сгенерированный id; так же для вариантов.
 - `POST /api/forms/:id/publish` → `{ form }`. Требует ≥1 поля, иначе `400 VALIDATION_ERROR` с ключом `fields`.
@@ -84,18 +87,19 @@ interface ResponseView {
 }
 ```
 
-- `GET /api/forms/:id/responses.csv` → `text/csv` (UTF-8 с BOM, разделитель `;`).
+- `GET /api/forms/:id/responses/csv` → `text/csv` (UTF-8 с BOM, разделитель `;`, вложение).
 - `GET /api/forms/:id/analytics` → см. ниже.
 
 ## Публичное API
 
-- `GET /api/public/forms/:publicId` → `{ form: { publicId, title, description, fields } }`;
+- `GET /api/public/forms/:publicId` → `{ form: { publicId, title, description, fields, version } }`;
   `404 NOT_FOUND` — нет формы; `403 FORM_NOT_PUBLISHED` — форма не опубликована (содержимое не отдаётся).
-- `POST /api/public/forms/:publicId/responses` body `{ answers: { [fieldId]: value }, submissionId: uuid, sessionId?: uuid }`
+- `POST /api/public/forms/:publicId/responses` body `{ answers: { [fieldId]: value }, submissionId: uuid, sessionId?: uuid, formVersion?: number }`
   → `201 { response: { id, submittedAt } }`.
   Сервер сам загружает актуальную схему формы и валидирует ответы. Неизвестные ключи `answers` отбрасываются.
-  Ошибки: `400 VALIDATION_ERROR` (`fields: { [fieldId]: сообщение }`), `403`, `404`.
-  Повтор с тем же `submissionId` → `200` с тем же ответом (идемпотентность, защита от двойной отправки).
+  Ошибки: `400 VALIDATION_ERROR` (`fields: { [fieldId]: сообщение }`), `403`, `404`,
+  `409 FORM_CHANGED` (передана `formVersion`, а менеджер успел изменить форму; тело содержит `form` — клиент перерисовывает форму, сохраняя введённые ответы).
+  Повтор с тем же `submissionId` для той же формы → `200` с тем же ответом (идемпотентность, защита от двойной отправки); проверяется до остальных проверок.
 - `POST /api/public/forms/:publicId/events` body `{ sessionId: uuid, type: 'view' | 'start' | 'field', fieldId? }` → `204`.
 
 ## Аналитика
