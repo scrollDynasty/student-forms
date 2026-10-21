@@ -11,10 +11,14 @@
 | 400 | `INVALID_JSON` | Тело запроса — не JSON / не объект |
 | 400 | `VALIDATION_ERROR` | Ошибки валидации; `fields` — карта ошибок |
 | 403 | `FORM_NOT_PUBLISHED` | Публичное обращение к неопубликованной форме |
+| 403 | `FORBIDDEN_ORIGIN` | Изменение через админ-API с чужого сайта (заголовок `Origin` не совпадает с хостом) |
 | 404 | `NOT_FOUND` | Неизвестный id / publicId / маршрут API |
 | 409 | `VERSION_CONFLICT` | `PUT` с устаревшей `version` (форму уже сохранили в другой вкладке) |
 | 409 | `FORM_CHANGED` | Студент отправляет ответ на устаревшую версию формы; в ответе `form` — актуальная публичная форма |
-| 413 | `PAYLOAD_TOO_LARGE` | Тело больше 200 КБ |
+| 405 | — | Метод не поддерживается существующим маршрутом (ответ Next.js без тела) |
+| 413 | `PAYLOAD_TOO_LARGE` | Тело больше 200 КБ (проверяется потоково, в т.ч. для chunked) |
+| 429 | `RATE_LIMITED` | Больше 30 отправок или 600 событий в минуту с одного IP на форму |
+| 429 | `RESPONSE_LIMIT` | У формы уже 10 000 ответов |
 | 500 | `INTERNAL` | Непредвиденная ошибка |
 
 ## Модель данных
@@ -65,7 +69,7 @@ checkbox — `boolean`. Необязательное незаполненное 
   `FormSummary = { id, publicId, title, description, status, fieldCount, responseCount, createdAt, updatedAt, publishedAt }`, сортировка по `updatedAt` убыв.
 - `POST /api/forms` body `{ title, description?, fields? }` → `201 { form }`
 - `GET /api/forms/:id` → `{ form }`
-- `PUT /api/forms/:id` body `{ title, description, fields, version? }` → `{ form }` (полная замена содержимого, `version + 1`).
+- `PUT /api/forms/:id` body `{ title, description, fields, version? }` (`fields` обязателен — без него `400`, чтобы случайно не стереть поля) → `{ form }` (полная замена содержимого, `version + 1`).
   Если передана `version` и она не совпадает с текущей → `409 VERSION_CONFLICT` (защита от перезаписи из другой вкладки).
   Ключи ошибок: `title`, `description`, `fields`, `fields.<index>.label`, `fields.<index>.options`, `fields.<index>.options.<j>`, `fields.<index>.min` и т.д.
   Поле без `id` получает сгенерированный id; так же для вариантов.
@@ -123,4 +127,7 @@ interface ResponseView {
 }
 ```
 `filled` — сколько сеансов изменили поле; `lastBeforeAbandon` — сколько брошенных сеансов
-остановились именно на этом поле (последнее изменённое поле).
+остановились именно на этом поле (последнее поле, к заполнению которого студент приступил).
+Если отправка пришла с `sessionId`, для которого не было событий, сеанс считается просмотренным и начатым,
+чтобы воронка оставалась согласованной. Аналитика — best-effort: `sessionId` генерирует клиент,
+поэтому накрутку можно лишь ограничить (лимиты частоты, не более 20 000 сеансов на форму), но не исключить.
