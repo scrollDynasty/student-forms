@@ -130,12 +130,18 @@
     font-family: inherit;
   }
 
-  /* Organic focus ring: one themed outline for every control, never the browser default. */
+  /* Organic focus ring: one themed outline for every control, never the browser default.
+     The colour is set everywhere up front, so transition-colors on buttons never animates the ring
+     from the text colour into it. */
+  * {
+    outline-color: var(--color-accent-600);
+  }
   :focus {
     outline: none;
   }
   :focus-visible {
-    outline: 2px solid var(--color-accent);
+    /* accent-600, not accent: at least 3:1 against the page, cards and the darker panels (WCAG 1.4.11). */
+    outline: 2px solid var(--color-accent-600);
     outline-offset: 2px;
   }
 

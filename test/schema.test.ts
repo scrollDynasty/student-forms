@@ -6,6 +6,7 @@ import {
   normalizeFormInput,
   validateAnswers,
   formatValue,
+  generateId,
   generateUuid,
   type Field,
 } from '../lib/schema';
@@ -90,7 +91,7 @@ describe('normalizeFormInput', () => {
     const ids = value.fields.map((f) => f.id);
     assert.equal(new Set(ids).size, ids.length);
     assert.ok(ids.every((id) => /^[A-Za-z0-9_-]{1,64}$/.test(id)));
-    assert.match(value.fields[4].options[0].id, /^[A-Za-z0-9_-]+$/);
+    assert.match(value.fields[4]?.options[0]?.id ?? '', /^[A-Za-z0-9_-]+$/);
   });
 
   test('strips options from non-choice fields and min/max from non-number fields', () => {
@@ -98,8 +99,8 @@ describe('normalizeFormInput', () => {
       title: 'T',
       fields: [field({ options: opts, min: 1, max: 2 })],
     });
-    assert.deepEqual(value.fields[0].options, []);
-    assert.equal(value.fields[0].min, null);
+    assert.deepEqual(value.fields[0]?.options, []);
+    assert.equal(value.fields[0]?.min, null);
   });
 
   test('validates number min <= max', () => {
@@ -107,8 +108,8 @@ describe('normalizeFormInput', () => {
     assert.ok(r.errors['fields.0.max']);
     const ok = norm({ title: 'T', fields: [field({ type: 'number', min: '1', max: '' })] });
     assert.deepEqual(ok.errors, {});
-    assert.equal(ok.value.fields[0].min, 1);
-    assert.equal(ok.value.fields[0].max, null);
+    assert.equal(ok.value.fields[0]?.min, 1);
+    assert.equal(ok.value.fields[0]?.max, null);
   });
 
   test('enforces length limits', () => {
@@ -222,6 +223,12 @@ describe('hardening', () => {
     assert.deepEqual(validateAnswers(fields, { m: 'first.last@uni.edu.ru', p: '8 800 555-35-35' }).errors, {});
   });
 
+  test('generated ids avoid look-alike characters (I/l/1, O/0) so a link can be retyped', () => {
+    const sample = Array.from({ length: 300 }, () => generateId(10)).join('');
+    assert.doesNotMatch(sample, /[Il1O0]/);
+    assert.match(sample, /^[A-Za-z0-9]+$/);
+  });
+
   test('generateUuid returns RFC 4122 v4 ids without crypto.randomUUID', () => {
     const ids = new Set(Array.from({ length: 50 }, () => generateUuid()));
     assert.equal(ids.size, 50);
@@ -232,6 +239,23 @@ describe('hardening', () => {
     const fields = [field({ id: 'n', type: 'number' })];
     assert.ok(validateAnswers(fields, { n: '9'.repeat(400) }).errors.n);
     assert.ok(norm({ title: 'T', fields: [field({ type: 'number', min: '9'.repeat(400) })] }).errors['fields.0.min']);
+  });
+
+  test('numbers are shown with a decimal comma (Russian Excel reads "7.5" as a date)', () => {
+    assert.equal(formatValue(field({ type: 'number' }), 7.5), '7,5');
+    assert.equal(formatValue(field({ type: 'number' }), -1000), '-1000');
+  });
+
+  test('control characters are rejected in text answers and form texts, line breaks and tabs are kept', () => {
+    const fields = [field({ id: 't', type: 'long_text' })];
+    assert.ok(validateAnswers(fields, { t: 'a\u0000b' }).errors.t);
+    assert.ok(validateAnswers(fields, { t: 'a\u001bb' }).errors.t);
+    // C1 controls, line/paragraph separators and bidi overrides can garble or disguise text in the admin.
+    for (const ch of ['\u0085', '\u2028', '\u202e', '\u2066']) assert.ok(validateAnswers(fields, { t: `a${ch}b` }).errors.t, escape(ch));
+    assert.equal(validateAnswers(fields, { t: 'строка 1\nстрока 2\tконец' }).values.t, 'строка 1\nстрока 2\tконец');
+    const { errors } = norm({ title: 'T\u0007', fields: [field({ label: 'В\u0000опрос' })] });
+    assert.ok(errors.title);
+    assert.ok(errors['fields.0.label']);
   });
 
   test('a NaN min/max (the builder marks unparsable input that way) is an error, not "no limit"', () => {
@@ -281,6 +305,11 @@ describe('isAllowedHost (DNS-rebinding guard)', async () => {
     for (const h of ['evil.example@127.0.0.1', 'evil.example@localhost:3000', '127.0.0.1/evil', 'localhost?x', 'local host']) {
       assert.equal(isAllowedHost(h, ''), false, h);
     }
+  });
+
+  test('accepts single-label machine names (a rebinding attacker needs a registrable domain)', () => {
+    for (const h of ['my-laptop:3000', 'devbox', 'MYVM:3000']) assert.equal(isAllowedHost(h, ''), true, h);
+    for (const h of ['my-laptop.evil.example', 'devbox.']) assert.equal(isAllowedHost(h, ''), false, h);
   });
 });
 

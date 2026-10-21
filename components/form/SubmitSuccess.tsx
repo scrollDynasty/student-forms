@@ -40,7 +40,7 @@ export function SubmitSuccess({
           Ответ отправлен
         </Heading>
         <p className="mb-0 mt-3 max-w-[440px] text-base text-neutral-800">
-          {message ?? `Спасибо! Организатор «${title}» получил ваши ответы ${formatDayTime(submittedAt)}.`}
+          {message ?? `Спасибо! Ваши ответы на форму «${title}» получены ${formatDayTime(submittedAt)}.`}
         </p>
         {note ? <p className="mb-0 mt-2 text-sm text-neutral-700">{note}</p> : null}
         <Button onClick={onAgain} className="mt-7 px-[22px]">

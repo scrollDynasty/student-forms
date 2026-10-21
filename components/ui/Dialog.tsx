@@ -31,6 +31,7 @@ export function Dialog({
 }) {
   const ref = useRef<HTMLDialogElement>(null);
   const opener = useRef<HTMLElement | null>(null);
+  const pressedOnBackdrop = useRef(false);
   const titleId = useId();
   const descId = useId();
 
@@ -65,9 +66,14 @@ export function Dialog({
         e.preventDefault();
         onClose();
       }}
+      // A click on the backdrop (the dialog box itself, outside the panel) closes it — but only one that also
+      // started there: a text selection dragged out of the panel ends with a click on the dialog box too.
+      onPointerDown={(e) => {
+        pressedOnBackdrop.current = e.target === e.currentTarget;
+      }}
       onClick={(e) => {
-        // A click on the backdrop (the dialog box itself, outside the panel) closes it.
-        if (e.target === e.currentTarget) onClose();
+        if (pressedOnBackdrop.current && e.target === e.currentTarget) onClose();
+        pressedOnBackdrop.current = false;
       }}
       className={
         drawer
@@ -93,7 +99,12 @@ export function Dialog({
                 <IconX />
               </IconButton>
             </div>
-            {children ? <div className="min-h-0 flex-1 overflow-y-auto px-6 py-3 sm:px-7">{children}</div> : null}
+            {children ? (
+              // Focusable and named, so the scrolling content can be read with the keyboard in every browser.
+              <div role="region" aria-labelledby={titleId} tabIndex={0} className="min-h-0 flex-1 overflow-y-auto px-6 py-3 sm:px-7">
+                {children}
+              </div>
+            ) : null}
             {footer ? <div className="flex flex-wrap justify-between gap-2 px-5 pb-6 pt-4 sm:px-7">{footer}</div> : null}
           </div>
         ) : (

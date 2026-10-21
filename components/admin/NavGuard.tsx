@@ -27,6 +27,8 @@ interface NavGuardApi {
   /** Remember the current history entry as the guarded page (call after each URL change on it). */
   syncEntry: () => void;
   requestNavigation: (href: string) => boolean;
+  /** The guarded screen is going away: stop guarding without touching history. */
+  release: () => void;
 }
 
 const NavGuardContext = createContext<NavGuardApi | null>(null);
@@ -121,7 +123,16 @@ export function NavGuardProvider({ children }: { children: ReactNode }) {
     return () => window.removeEventListener('popstate', onPopState);
   }, [ensureSentinel]);
 
-  const api = useMemo(() => ({ setDirty, syncEntry, requestNavigation }), [setDirty, syncEntry, requestNavigation]);
+  const release = useCallback(() => {
+    // Not setDirty(false): that drops the sentinel with history.back(), a navigation of its own.
+    dirtyRef.current = false;
+    setPending(null);
+  }, []);
+
+  const api = useMemo(
+    () => ({ setDirty, syncEntry, requestNavigation, release }),
+    [setDirty, syncEntry, requestNavigation, release],
+  );
 
   return (
     <NavGuardContext.Provider value={api}>

@@ -2,11 +2,12 @@
 
 import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react';
 import { UUID_RE, generateUuid, type Answers } from '@/lib/schema';
-import { api, changedFormFrom, errorMessage, isApiError, type PublicForm } from '@/lib/api-client';
+import { api, changedFormFrom, errorMessage, isRequestError, type PublicForm } from '@/lib/api-client';
 import { Button } from '@/components/ui/Button';
 import { Alert, LoadingStatus, Skeleton } from '@/components/ui/feedback';
 import { IconAlert, IconForm, IconRefresh } from '@/components/ui/icons';
-import { FormRenderer, sanitizeAnswers, type DraftAnswers, type SubmitOutcome } from './FormRenderer';
+import { sanitizeAnswers, type DraftAnswers } from '@/lib/answers';
+import { FormRenderer, type SubmitOutcome } from './FormRenderer';
 import { SubmitSuccess } from './SubmitSuccess';
 
 type PageState =
@@ -58,8 +59,9 @@ export function PublicFormView({ publicId }: { publicId: string }) {
   const startedRef = useRef(false);
   const touchedRef = useRef(new Set<string>());
   const viewSentRound = useRef<number | null>(null);
-  // Idempotency key: created on the first submit attempt, reused for retries until success.
-  const submissionIdRef = useRef<string | null>(null);
+  // Idempotency key for one exact set of answers: retrying the same answers reuses it (no duplicate when the
+  // first attempt was stored but its reply was lost); edited answers get a new key, so the edit is never dropped.
+  const submissionRef = useRef<{ id: string; answersKey: string } | null>(null);
 
   const getSessionId = useCallback(() => {
     if (sessionRef.current) return sessionRef.current;
@@ -81,8 +83,8 @@ export function PublicFormView({ publicId }: { publicId: string }) {
       },
       (e: unknown) => {
         if (cancelled) return;
-        if (isApiError(e) && e.status === 404) setState({ status: 'not_found' });
-        else if (isApiError(e) && e.status === 403) setState({ status: 'closed' });
+        if (isRequestError(e) && e.status === 404) setState({ status: 'not_found' });
+        else if (isRequestError(e) && e.code === 'FORM_NOT_PUBLISHED') setState({ status: 'closed' });
         else setState({ status: 'error', message: errorMessage(e) });
       },
     );
@@ -92,12 +94,29 @@ export function PublicFormView({ publicId }: { publicId: string }) {
   }, [publicId, reloadKey]);
 
   const ready = state.status === 'ready';
-  const formTitle = state.status === 'ready' ? state.form.title : null;
+  // The tab title says what the page shows (WCAG 2.4.2), not just «Форма отклика».
+  const pageTitle =
+    state.status === 'ready'
+      ? success !== null
+        ? `Ответ отправлен · ${state.form.title}`
+        : state.form.title
+      : state.status === 'not_found'
+        ? 'Форма не найдена'
+        : state.status === 'closed'
+          ? 'Форма не принимает ответы'
+          : state.status === 'error'
+            ? 'Не удалось загрузить форму'
+            : null;
   const restoredDraft = state.status === 'ready' && round === 0 && Object.keys(state.draft).length > 0;
 
   useEffect(() => {
-    if (formTitle) document.title = formTitle;
-  }, [formTitle]);
+    if (pageTitle) document.title = pageTitle;
+  }, [pageTitle]);
+
+  // «Отправить ещё один ответ» replaces the success screen with an empty form: put focus at its start.
+  useEffect(() => {
+    if (round > 0 && success === null) document.getElementById('form-heading')?.focus();
+  }, [round, success]);
 
   // After a 409 FORM_CHANGED the re-rendered form shows a notice: move focus there so it is seen and announced
   // (the counter re-runs this on every repeated change).
@@ -135,15 +154,16 @@ export function PublicFormView({ publicId }: { publicId: string }) {
 
   async function submit(values: Answers): Promise<SubmitOutcome> {
     if (state.status !== 'ready') return { ok: false };
-    if (!submissionIdRef.current) submissionIdRef.current = generateUuid();
+    const answersKey = JSON.stringify(values);
+    if (submissionRef.current?.answersKey !== answersKey) submissionRef.current = { id: generateUuid(), answersKey };
     try {
       const res = await api.submitResponse(publicId, {
         answers: values,
-        submissionId: submissionIdRef.current,
+        submissionId: submissionRef.current.id,
         sessionId: getSessionId(),
         formVersion: state.form.version,
       });
-      submissionIdRef.current = null;
+      submissionRef.current = null;
       writeStored(sessionKey(publicId), null);
       writeStored(draftKey(publicId), null);
       sessionRef.current = null;
@@ -151,12 +171,14 @@ export function PublicFormView({ publicId }: { publicId: string }) {
       setSuccess(res.submittedAt);
       return { ok: true };
     } catch (e) {
-      if (!isApiError(e)) return { ok: false, message: 'Не удалось отправить ответ. Попробуйте ещё раз.' };
+      if (!isRequestError(e)) return { ok: false, message: 'Не удалось отправить ответ. Попробуйте ещё раз.' };
       if (e.code === 'NETWORK') {
-        return { ok: false, message: `${e.message.replace(/\.$/, '')}. Ваши ответы остались на странице — проверьте интернет и нажмите «Отправить» ещё раз.` };
+        // Only the reason from the client («Нет соединения…», «Сервер не ответил вовремя»): the advice is ours.
+        const reason = e.message.split('.')[0];
+        return { ok: false, message: `${reason}. Ваши ответы остались на странице — проверьте интернет и нажмите «Отправить» ещё раз.` };
       }
       // Never replace the page here: the student's typed answers must stay visible (and in the draft).
-      if (e.status === 403) {
+      if (e.code === 'FORM_NOT_PUBLISHED') {
         return {
           ok: false,
           message:
@@ -185,7 +207,7 @@ export function PublicFormView({ publicId }: { publicId: string }) {
   function again() {
     startedRef.current = false;
     touchedRef.current = new Set();
-    submissionIdRef.current = null;
+    submissionRef.current = null;
     setSuccess(null);
     setRound((r) => r + 1);
   }

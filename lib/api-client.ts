@@ -1,75 +1,21 @@
 // Typed browser-side wrapper around the JSON API described in docs/API.md.
-// Every non-2xx answer becomes an ApiError; a failed network request becomes ApiError with code 'NETWORK'.
+// Every non-2xx answer becomes a RequestError; a failed network request becomes RequestError with code 'NETWORK'.
+// (Named apart from the server's ApiError in lib/server/http.ts, which is the error the API answers with.)
 
-import type { Answers, Field, FieldType } from '@/lib/schema';
+import type { Answers, Field } from '@/lib/schema';
+import type { getAnalytics, listForms, listResponses, toPublicForm } from '@/lib/server/forms';
+import type { StoredForm } from '@/lib/server/store';
 
-export type FormStatus = 'draft' | 'published';
-
-export interface FormDto {
-  id: string;
-  publicId: string;
-  title: string;
-  description: string;
-  status: FormStatus;
-  fields: Field[];
-  version: number;
-  createdAt: string;
-  updatedAt: string;
-  publishedAt: string | null;
-}
-
-export interface FormSummary {
-  id: string;
-  publicId: string;
-  title: string;
-  description: string;
-  status: FormStatus;
-  fieldCount: number;
-  responseCount: number;
-  createdAt: string;
-  updatedAt: string;
-  publishedAt: string | null;
-}
-
-export interface ResponseItem {
-  fieldId: string;
-  label: string;
-  type: FieldType;
-  value: unknown;
-  display: string;
-}
-
-export interface ResponseView {
-  id: string;
-  submittedAt: string;
-  formVersion: number;
-  items: ResponseItem[];
-}
-
-export interface AnalyticsField {
-  fieldId: string;
-  label: string;
-  filled: number;
-  lastBeforeAbandon: number;
-}
-
-export interface Analytics {
-  views: number;
-  starts: number;
-  submissions: number;
-  startRate: number | null;
-  completionRate: number | null;
-  abandoned: number;
-  fields: AnalyticsField[];
-}
-
-export interface PublicForm {
-  publicId: string;
-  title: string;
-  description: string;
-  fields: Field[];
-  version: number;
-}
+// Response shapes come from the server code itself (type-only imports: nothing of it reaches the browser
+// bundle), so renaming a field on the server breaks this file's build instead of silently breaking the UI.
+export type FormDto = StoredForm;
+export type FormStatus = FormDto['status'];
+export type FormSummary = ReturnType<typeof listForms>[number];
+export type ResponseView = ReturnType<typeof listResponses>['responses'][number];
+export type ResponseItem = ResponseView['items'][number];
+export type Analytics = ReturnType<typeof getAnalytics>;
+export type AnalyticsField = Analytics['fields'][number];
+export type PublicForm = ReturnType<typeof toPublicForm>;
 
 export interface FormContentInput {
   title: string;
@@ -80,7 +26,7 @@ export interface FormContentInput {
 
 export type AnalyticsEvent = { sessionId: string; type: 'view' | 'start' } | { sessionId: string; type: 'field'; fieldId: string };
 
-export class ApiError extends Error {
+export class RequestError extends Error {
   readonly status: number;
   readonly code: string;
   readonly fields?: Record<string, string>;
@@ -88,7 +34,7 @@ export class ApiError extends Error {
 
   constructor(status: number, code: string, message: string, fields?: Record<string, string>, body?: unknown) {
     super(message);
-    this.name = 'ApiError';
+    this.name = 'RequestError';
     this.status = status;
     this.code = code;
     this.fields = fields;
@@ -96,7 +42,7 @@ export class ApiError extends Error {
   }
 }
 
-export const isApiError = (e: unknown): e is ApiError => e instanceof ApiError;
+export const isRequestError = (e: unknown): e is RequestError => e instanceof RequestError;
 
 /** Human-readable message for any thrown value (shared by all UI components). */
 export function errorMessage(e: unknown): string {
@@ -105,7 +51,7 @@ export function errorMessage(e: unknown): string {
 }
 
 /** Requests that take longer than this are aborted and reported like a lost connection. */
-export const REQUEST_TIMEOUT_MS = 20_000;
+const REQUEST_TIMEOUT_MS = 20_000;
 const NETWORK_MESSAGE = 'Нет соединения с сервером';
 const TIMEOUT_MESSAGE = 'Сервер не ответил вовремя. Проверьте соединение и попробуйте ещё раз.';
 
@@ -137,7 +83,7 @@ async function request<T>(method: string, path: string, body?: unknown): Promise
     // The timeout also covers reading the body.
     text = res.status === 204 ? '' : await res.text();
   } catch (e) {
-    throw new ApiError(0, 'NETWORK', isTimeout(e) ? TIMEOUT_MESSAGE : NETWORK_MESSAGE);
+    throw new RequestError(0, 'NETWORK', isTimeout(e) ? TIMEOUT_MESSAGE : NETWORK_MESSAGE);
   }
 
   if (res.status === 204) return null as T;
@@ -159,11 +105,11 @@ async function request<T>(method: string, path: string, body?: unknown): Promise
         ? err.message
         : (STATUS_MESSAGES[res.status] ?? `Ошибка сервера (${res.status}). Попробуйте ещё раз.`);
     const fields = isRecord(err?.fields) ? (err.fields as Record<string, string>) : undefined;
-    throw new ApiError(res.status, code, message, fields, data);
+    throw new RequestError(res.status, code, message, fields, data);
   }
 
   if (data === null) {
-    throw new ApiError(res.status, 'INVALID_RESPONSE', 'Сервер вернул неожиданный ответ');
+    throw new RequestError(res.status, 'INVALID_RESPONSE', 'Сервер вернул неожиданный ответ');
   }
   return data as T;
 }
@@ -198,7 +144,9 @@ export const api = {
 
   listResponses: (id: string) => request<{ responses: ResponseView[]; total: number }>('GET', `/api/forms/${enc(id)}/responses`),
 
-  responsesCsvUrl: (id: string) => `/api/forms/${enc(id)}/responses/csv`,
+  /** Times in the CSV use the manager's time zone, like the admin screens. */
+  responsesCsvUrl: (id: string) =>
+    `/api/forms/${enc(id)}/responses/csv?tz=${enc(Intl.DateTimeFormat().resolvedOptions().timeZone)}`,
 
   getAnalytics: (id: string) => request<Analytics>('GET', `/api/forms/${enc(id)}/analytics`),
 
@@ -226,7 +174,7 @@ export const api = {
 };
 
 /** The fresh public form that a 409 FORM_CHANGED answer carries, if any. */
-export function changedFormFrom(error: ApiError): PublicForm | null {
+export function changedFormFrom(error: RequestError): PublicForm | null {
   const body = error.body;
   if (isRecord(body) && isRecord(body.form) && Array.isArray(body.form.fields)) {
     return body.form as unknown as PublicForm;

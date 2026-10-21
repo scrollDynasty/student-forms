@@ -94,14 +94,28 @@ const NUMERIC_RE = /^-?(\d+([.,]\d+)?|[.,]\d+)([eE][-+]?\d+)?$/;
 const MAX_SIGNIFICANT_DIGITS = 15;
 export const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
+// Control characters (tab, line feed and carriage return are allowed), Unicode line/paragraph separators
+// and bidi overrides: nobody types them into a form, but sent through the API they break CSV and terminals
+// or make a text display differently from what it is.
+const CONTROL_RE = /[\u0000-\u0008\u000B\u000C\u000E-\u001F\u007F-\u009F\u2028\u2029\u202A-\u202E\u2066-\u2069]/;
+const INVALID_CHARS = 'Содержит недопустимые символы';
+
 const isValidId = (v: unknown): v is string => typeof v === 'string' && ID_RE.test(v) && !RESERVED_IDS.has(v);
 
+// No I/l/1 or O/0: public links get read aloud and retyped. 57 symbols, about 58 bits for a 10-symbol id.
+const ID_ALPHABET = 'ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz23456789';
+
+/** Random id from crypto.getRandomValues; bytes past the last full multiple of 57 are skipped, so no symbol is favoured. */
 export function generateId(length = 10): string {
-  const alphabet = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789';
-  const bytes = new Uint8Array(length);
-  globalThis.crypto.getRandomValues(bytes);
+  const limit = 256 - (256 % ID_ALPHABET.length);
   let out = '';
-  for (const b of bytes) out += alphabet[b % alphabet.length];
+  while (out.length < length) {
+    const bytes = new Uint8Array(length * 2);
+    globalThis.crypto.getRandomValues(bytes);
+    for (const b of bytes) {
+      if (b < limit && out.length < length) out += ID_ALPHABET[b % ID_ALPHABET.length];
+    }
+  }
   return out;
 }
 
@@ -109,8 +123,8 @@ export function generateId(length = 10): string {
 export function generateUuid(): string {
   const b = new Uint8Array(16);
   globalThis.crypto.getRandomValues(b);
-  b[6] = (b[6] & 0x0f) | 0x40;
-  b[8] = (b[8] & 0x3f) | 0x80;
+  b[6] = ((b[6] ?? 0) & 0x0f) | 0x40; // version 4
+  b[8] = ((b[8] ?? 0) & 0x3f) | 0x80; // RFC 4122 variant
   const hex = Array.from(b, (x) => x.toString(16).padStart(2, '0')).join('');
   return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`;
 }
@@ -131,23 +145,28 @@ function toNumberOrNull(v: unknown): number | null {
 
 function hasTooManyDigits(v: unknown): boolean {
   if (typeof v !== 'string') return false;
-  const mantissa = v.trim().split(/[eE]/)[0].replace(/\D/g, '');
+  const mantissa = (v.trim().split(/[eE]/)[0] ?? '').replace(/\D/g, '');
   return mantissa.replace(/^0+/, '').replace(/0+$/, '').length > MAX_SIGNIFICANT_DIGITS;
 }
+
+/** Placeholder texts of a new question; a form still showing them is probably not finished. */
+export const DEFAULT_QUESTION_LABEL = 'Новый вопрос';
+export const defaultOptionLabel = (n: number) => `Вариант ${n}`;
+export const isDefaultOptionLabel = (label: string) => /^Вариант \d+$/.test(label.trim());
 
 export function createField(type: FieldType = 'short_text'): Field {
   const meta = TYPE_MAP.get(type) ?? TYPE_MAP.get('short_text')!;
   return {
     id: generateId(),
     type: meta.type,
-    label: meta.type === 'checkbox' ? 'Я согласен(на) на обработку персональных данных' : 'Новый вопрос',
+    label: meta.type === 'checkbox' ? 'Я согласен(на) на обработку персональных данных' : DEFAULT_QUESTION_LABEL,
     hint: '',
     placeholder: '',
     required: false,
     options: meta.choice
       ? [
-          { id: generateId(), label: 'Вариант 1' },
-          { id: generateId(), label: 'Вариант 2' },
+          { id: generateId(), label: defaultOptionLabel(1) },
+          { id: generateId(), label: defaultOptionLabel(2) },
         ]
       : [],
     min: null,
@@ -168,9 +187,11 @@ export function normalizeFormInput(input: unknown): { value: FormContent | null;
   const title = str(input.title);
   if (!title) errors.title = 'Укажите название формы';
   else if (title.length > LIMITS.title) errors.title = `Не длиннее ${LIMITS.title} символов`;
+  else if (CONTROL_RE.test(title)) errors.title = INVALID_CHARS;
 
   const description = str(input.description);
   if (description.length > LIMITS.description) errors.description = `Не длиннее ${LIMITS.description} символов`;
+  else if (CONTROL_RE.test(description)) errors.description = INVALID_CHARS;
 
   let rawFields: unknown[] = [];
   if (input.fields !== undefined && !Array.isArray(input.fields)) {
@@ -198,14 +219,16 @@ export function normalizeFormInput(input: unknown): { value: FormContent | null;
     const label = str(f.label);
     if (!label) errors[`${key}.label`] = 'Укажите вопрос';
     else if (label.length > LIMITS.label) errors[`${key}.label`] = `Не длиннее ${LIMITS.label} символов`;
+    else if (CONTROL_RE.test(label)) errors[`${key}.label`] = INVALID_CHARS;
 
     const hint = str(f.hint);
     if (hint.length > LIMITS.hint) errors[`${key}.hint`] = `Не длиннее ${LIMITS.hint} символов`;
+    else if (CONTROL_RE.test(hint)) errors[`${key}.hint`] = INVALID_CHARS;
 
     const placeholder = meta?.placeholder ? str(f.placeholder) : '';
     if (placeholder.length > LIMITS.placeholder) {
       errors[`${key}.placeholder`] = `Не длиннее ${LIMITS.placeholder} символов`;
-    }
+    } else if (CONTROL_RE.test(placeholder)) errors[`${key}.placeholder`] = INVALID_CHARS;
 
     let options: Option[] = [];
     if (meta?.choice) {
@@ -221,7 +244,8 @@ export function normalizeFormInput(input: unknown): { value: FormContent | null;
         if (!optLabel) errors[`${key}.options.${j}`] = 'Вариант не может быть пустым';
         else if (optLabel.length > LIMITS.optionLabel) {
           errors[`${key}.options.${j}`] = `Не длиннее ${LIMITS.optionLabel} символов`;
-        } else if (seenLabels.has(lower)) errors[`${key}.options.${j}`] = 'Такой вариант уже есть';
+        } else if (CONTROL_RE.test(optLabel)) errors[`${key}.options.${j}`] = INVALID_CHARS;
+        else if (seenLabels.has(lower)) errors[`${key}.options.${j}`] = 'Такой вариант уже есть';
         seenLabels.add(lower);
         let id = isValidId(opt.id) ? opt.id : generateId();
         while (optionIds.has(id)) id = generateId();
@@ -277,12 +301,13 @@ function validateOne(field: Field, raw: unknown): OneResult {
       const v = raw.trim();
       const limit = LIMITS[field.type];
       if (v.length > limit) return { error: `Не длиннее ${limit} символов` };
+      if (CONTROL_RE.test(v)) return { error: INVALID_CHARS };
       return { value: v };
     }
     case 'email': {
       if (typeof raw !== 'string') return { error: 'Ожидался email' };
       const v = raw.trim();
-      if (v.length > LIMITS.email || !EMAIL_RE.test(v)) {
+      if (v.length > LIMITS.email || !EMAIL_RE.test(v) || CONTROL_RE.test(v)) {
         return { error: 'Введите корректный email, например name@example.com' };
       }
       return { value: v };
@@ -379,6 +404,9 @@ export function formatValue(field: Pick<Field, 'type' | 'options'>, value: unkno
       return Array.isArray(value) ? value.map(labelOf).join(', ') : String(value);
     case 'checkbox':
       return value === true ? 'Да' : 'Нет';
+    case 'number':
+      // A decimal comma, as Russian users (and Russian Excel opening the CSV) expect.
+      return String(value).replace('.', ',');
     case 'date': {
       const m = DATE_RE.exec(String(value));
       return m ? `${m[3]}.${m[2]}.${m[1]}` : String(value);

@@ -6,6 +6,7 @@ import {
   LIMITS,
   fieldTypeIcon,
   fieldTypeLabel,
+  defaultOptionLabel,
   generateId,
   hasPlaceholder,
   isChoiceType,
@@ -16,13 +17,14 @@ import {
 import { Button, IconButton } from '@/components/ui/Button';
 import { FieldError, Label, TextInput, Toggle, inputClasses } from '@/components/ui/inputs';
 import { IconArrowDown, IconArrowUp, IconChevronUp, IconCopy, IconPlus, IconTrash, IconX } from '@/components/ui/icons';
+import { swapped } from '@/lib/list';
 import { fieldElId, hasFieldErrors, moveElId, optElId, summaryElId, type FieldErrors } from './errors';
 
-export function nextOptionLabel(options: Option[]): string {
+function nextOptionLabel(options: Option[]): string {
   const used = new Set(options.map((o) => o.label.trim().toLowerCase()));
   let n = options.length + 1;
-  while (used.has(`вариант ${n}`)) n += 1;
-  return `Вариант ${n}`;
+  while (used.has(defaultOptionLabel(n).toLowerCase())) n += 1;
+  return defaultOptionLabel(n);
 }
 
 /**
@@ -194,7 +196,7 @@ export function FieldCard({
     >
       <div className="flex flex-wrap items-center gap-x-3.5 gap-y-2">
         <TypeIcon type={field.type} active />
-        <p className="min-w-0 flex-1 truncate text-sm font-semibold text-neutral-700">
+        <p className="min-w-36 flex-1 truncate text-sm font-semibold text-neutral-700">
           Вопрос {num} · {fieldTypeLabel(field.type)}
         </p>
         <div className="flex items-center gap-0.5">
@@ -353,9 +355,7 @@ function OptionsEditor({
     const j = index + dir;
     const opt = options[index];
     if (!opt || j < 0 || j >= options.length) return;
-    const next = [...options];
-    [next[index], next[j]] = [next[j], next[index]];
-    onChange(next);
+    onChange(swapped(options, index, j));
     const atEdge = (dir === -1 && j === 0) || (dir === 1 && j === options.length - 1);
     const button = dir === -1 ? (atEdge ? 'down' : 'up') : atEdge ? 'up' : 'down';
     requestFocus(`${optElId(field.id, opt.id)}-${button}`);

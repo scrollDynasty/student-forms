@@ -13,7 +13,7 @@ import {
   type SetStateAction,
 } from 'react';
 import { normalizeFormInput, type Field } from '@/lib/schema';
-import { api, errorMessage, isApiError, type FormDto } from '@/lib/api-client';
+import { api, errorMessage, isRequestError, type FormDto } from '@/lib/api-client';
 import { Button, buttonClasses } from '@/components/ui/Button';
 import { ConfirmDialog } from '@/components/ui/Dialog';
 import { Alert, ErrorState, LoadingStatus, Skeleton, StatusBadge } from '@/components/ui/feedback';
@@ -25,7 +25,8 @@ import { BuilderTab, type Draft } from './BuilderTab';
 import { PreviewTab } from './PreviewTab';
 import { PublicLinkBox } from './PublicLinkBox';
 import { ResponsesTab, type ResponsesState } from './ResponsesTab';
-import { NO_ERRORS, countErrors, firstErrorTarget, mapErrors, type EditorErrors } from './errors';
+import { contentKey } from './contentKey';
+import { NO_ERRORS, countErrors, firstErrorTarget, mapErrors, templateTexts, type EditorErrors } from './errors';
 
 type Tab = 'builder' | 'preview' | 'responses' | 'analytics';
 const TAB_IDS: Tab[] = ['builder', 'preview', 'responses', 'analytics'];
@@ -35,20 +36,6 @@ type LoadState = { status: 'loading' } | { status: 'not_found' } | { status: 'er
 type Busy = null | 'save' | 'publish' | 'unpublish' | 'reload';
 
 const contentOf = (f: FormDto): Draft => ({ title: f.title, description: f.description, fields: f.fields });
-
-// The builder keeps an unparsable min/max as NaN (see FieldCard), which JSON would turn into null.
-const limitKey = (v: number | null) => (v === null || Number.isFinite(v) ? v : 'invalid');
-
-/** Order-stable serialization used to detect unsaved changes. */
-function serialize(d: Draft): string {
-  return JSON.stringify([
-    d.title,
-    d.description,
-    d.fields.map((f: Field) => [
-      f.id, f.type, f.label, f.hint, f.placeholder, f.required, f.options.map((o) => [o.id, o.label]), limitKey(f.min), limitKey(f.max),
-    ]),
-  ]);
-}
 
 export function FormEditor({ formId }: { formId: string }) {
   const searchParams = useSearchParams();
@@ -69,6 +56,8 @@ export function FormEditor({ formId }: { formId: string }) {
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [focusReq, setFocusReq] = useState<{ elId: string; select: boolean; n: number } | null>(null);
   const [confirmUnpublish, setConfirmUnpublish] = useState(false);
+  /** Placeholder texts the manager is asked about before publishing (null: no question open). */
+  const [templateWarning, setTemplateWarning] = useState<string[] | null>(null);
   const [responses, setResponses] = useState<ResponsesState>({ status: 'loading' });
   const responsesLoaded = useRef(false);
   const [respKey, setRespKey] = useState(0);
@@ -86,7 +75,7 @@ export function FormEditor({ formId }: { formId: string }) {
       },
       (e: unknown) => {
         if (cancelled) return;
-        if (isApiError(e) && e.status === 404) setLoad({ status: 'not_found' });
+        if (isRequestError(e) && e.status === 404) setLoad({ status: 'not_found' });
         else setLoad({ status: 'error', message: errorMessage(e) });
       },
     );
@@ -130,24 +119,30 @@ export function FormEditor({ formId }: { formId: string }) {
   }, []);
 
   // ---- dirty tracking, leave protection ------------------------------------------------------
-  const savedKey = useMemo(() => (saved ? serialize(contentOf(saved)) : ''), [saved]);
-  const draftKey = useMemo(() => serialize(draft), [draft]);
+  const savedKey = useMemo(() => (saved ? contentKey(contentOf(saved)) : ''), [saved]);
+  const draftKey = useMemo(() => contentKey(draft), [draft]);
   const dirty = saved !== null && savedKey !== draftKey;
 
   useEffect(() => {
     guard.setDirty(dirty);
   }, [dirty, guard]);
-  useEffect(() => () => guard.setDirty(false), [guard]);
+  useEffect(() => () => guard.release(), [guard]);
   // Let the guard know which history entry is "the editor" (tab switches create new entries).
   useEffect(() => {
     guard.syncEntry();
   }, [searchParams, guard]);
 
   // The page metadata can't know the form, so name the browser tab here (like the public form does).
-  const savedTitle = saved?.title;
+  const pageTitle = saved
+    ? `${saved.title} · Редактор формы`
+    : load.status === 'not_found'
+      ? 'Форма не найдена'
+      : load.status === 'error'
+        ? 'Не удалось загрузить форму'
+        : null;
   useEffect(() => {
-    if (savedTitle) document.title = `${savedTitle} · Редактор формы · Формы откликов`;
-  }, [savedTitle, searchParams]);
+    if (pageTitle) document.title = `${pageTitle} · Формы откликов`;
+  }, [pageTitle, searchParams]);
 
   useEffect(() => {
     if (!dirty) return;
@@ -193,17 +188,32 @@ export function FormEditor({ formId }: { formId: string }) {
   // ---- tabs (kept in ?tab= so deep links and the back button work) ---------------------------
   const setTab = useCallback(
     (next: Tab, mode: 'push' | 'replace' = 'push') => {
+      if (next === tab) return; // no duplicate history entry, no refresh that would never finish
       const qs = new URLSearchParams(searchParams.toString());
       if (next === 'builder') qs.delete('tab');
       else qs.set('tab', next);
       const s = qs.toString();
       const url = s ? `${pathname}?${s}` : pathname;
+      // The list re-downloads on every visit: show that the rows on screen may be about to change.
+      if (next === 'responses') setResponses((r) => (r.status === 'ready' ? { ...r, refreshing: true } : r));
       // Arrow-key browsing replaces the entry so it doesn't flood the history.
       if (mode === 'replace') window.history.replaceState(null, '', url);
       else window.history.pushState(null, '', url);
     },
-    [pathname, searchParams],
+    [pathname, searchParams, tab],
   );
+
+  // On a phone the tab strip scrolls sideways: keep the current section in view.
+  const tablistRef = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    const list = tablistRef.current;
+    const active = list?.querySelector<HTMLElement>('[aria-selected="true"]');
+    if (!list || !active) return;
+    const a = active.getBoundingClientRect();
+    const l = list.getBoundingClientRect();
+    if (a.left < l.left) list.scrollLeft -= l.left - a.left;
+    else if (a.right > l.right) list.scrollLeft += a.right - l.right;
+  }, [tab, load.status]);
 
   // ---- mutations -----------------------------------------------------------------------------
   function showErrors(next: EditorErrors, fields: Field[]) {
@@ -215,16 +225,16 @@ export function FormEditor({ formId }: { formId: string }) {
   }
 
   function handleMutationError(e: unknown, fields: Field[], action: string) {
-    if (isApiError(e) && e.code === 'VERSION_CONFLICT') {
+    if (isRequestError(e) && e.code === 'VERSION_CONFLICT') {
       setConflict(true);
       return;
     }
-    if (isApiError(e) && e.status === 400 && e.fields) {
+    if (isRequestError(e) && e.status === 400 && e.fields) {
+      // The error banner (role="alert") announces it; a toast on top would say the same thing twice.
       showErrors(mapErrors(e.fields, fields), fields);
-      toast.error(e.fields.fields ?? 'Исправьте ошибки перед сохранением');
       return;
     }
-    if (isApiError(e) && e.status === 404) {
+    if (isRequestError(e) && e.status === 404) {
       setLoad({ status: 'not_found' });
       return;
     }
@@ -242,7 +252,6 @@ export function FormEditor({ formId }: { formId: string }) {
     const check = normalizeFormInput(snapshot);
     if (Object.keys(check.errors).length > 0) {
       showErrors(mapErrors(check.errors, snapshot.fields), snapshot.fields);
-      toast.error('Исправьте ошибки перед сохранением');
       return null;
     }
     busyRef.current = true;
@@ -264,8 +273,9 @@ export function FormEditor({ formId }: { formId: string }) {
     }
   }
 
-  async function publish() {
+  async function publish(confirmedTemplates = false) {
     if (!saved || busyRef.current) return;
+    setTemplateWarning(null);
     if (conflict) {
       toast.error('Форму изменили в другой вкладке. Сначала загрузите актуальную версию.');
       return;
@@ -273,6 +283,12 @@ export function FormEditor({ formId }: { formId: string }) {
     // Publishing with unsaved changes saves first and stops if saving fails.
     const current = dirty ? await save() : saved;
     if (!current) return;
+    // Asked only about a valid, saved form: errors come first, and «Опубликовать как есть» then just publishes.
+    const templates = confirmedTemplates ? [] : templateTexts(current.fields);
+    if (templates.length > 0) {
+      setTemplateWarning(templates);
+      return;
+    }
     busyRef.current = true;
     setBusy('publish');
     try {
@@ -395,10 +411,11 @@ export function FormEditor({ formId }: { formId: string }) {
     else if (e.key === 'ArrowLeft') next = (i - 1 + TAB_IDS.length) % TAB_IDS.length;
     else if (e.key === 'Home') next = 0;
     else if (e.key === 'End') next = TAB_IDS.length - 1;
-    if (next === null) return;
+    const target = next === null ? undefined : TAB_IDS[next];
+    if (!target) return;
     e.preventDefault();
-    setTab(TAB_IDS[next], 'replace');
-    document.getElementById(`tab-${TAB_IDS[next]}`)?.focus();
+    setTab(target, 'replace');
+    document.getElementById(`tab-${target}`)?.focus();
   }
 
   const saveState =
@@ -454,6 +471,7 @@ export function FormEditor({ formId }: { formId: string }) {
 
         <div className="mt-7 flex flex-wrap items-center justify-between gap-4">
           <div
+            ref={tablistRef}
             role="tablist"
             aria-label="Разделы формы"
             onKeyDown={onTabKeyDown}
@@ -506,7 +524,7 @@ export function FormEditor({ formId }: { formId: string }) {
           <Alert
             tone="error"
             role="alert"
-            title="Исправьте ошибки перед сохранением"
+            title="Исправьте ошибки в форме"
             actions={
               <Button
                 size="sm"
@@ -521,7 +539,8 @@ export function FormEditor({ formId }: { formId: string }) {
               </Button>
             }
           >
-            {errorCount === 1 ? 'Найдена 1 ошибка — она отмечена в форме.' : `Найдено ошибок: ${errorCount}. Они отмечены в форме.`}
+            {errorCount === 1 ? 'Найдена 1 ошибка — она отмечена в форме.' : `Найдено ошибок: ${errorCount}. Они отмечены в форме.`}{' '}
+            Сохранить и опубликовать форму можно после исправления.
             {errors.other.length > 0 ? (
               <ul className="mt-1 list-disc pl-5">
                 {errors.other.map((m, i) => (
@@ -534,6 +553,9 @@ export function FormEditor({ formId }: { formId: string }) {
 
         {!published && tab === 'builder' && draft.fields.length > 0 && errorCount === 0 ? (
           <p className="px-1.5 text-sm text-neutral-700">Форма в черновике: студенты не увидят её, пока вы не нажмёте «Опубликовать».</p>
+        ) : null}
+        {published && tab === 'builder' && errorCount === 0 && (responseCount ?? 0) === 0 ? (
+          <p className="px-1.5 text-sm text-neutral-700">Форма опубликована: сохранённые изменения студенты увидят сразу.</p>
         ) : null}
 
         <div role="tabpanel" id={`panel-${tab}`} aria-labelledby={`tab-${tab}`}>
@@ -564,6 +586,24 @@ export function FormEditor({ formId }: { formId: string }) {
         </div>
       </div>
 
+      <ConfirmDialog
+        open={templateWarning !== null}
+        title="Опубликовать с шаблонными текстами?"
+        message={
+          <>
+            В форме остались тексты, которые конструктор подставляет сам. Студенты увидят их как есть:
+            <ul className="mb-0 mt-2 list-disc space-y-1 pl-5">
+              {templateWarning?.map((line) => (
+                <li key={line}>{line}</li>
+              ))}
+            </ul>
+          </>
+        }
+        confirmLabel="Опубликовать как есть"
+        cancelLabel="Вернуться к редактированию"
+        onConfirm={() => void publish(true)}
+        onCancel={() => setTemplateWarning(null)}
+      />
       <ConfirmDialog
         open={confirmUnpublish}
         title="Снять форму с публикации?"

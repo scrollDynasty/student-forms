@@ -1,11 +1,13 @@
 const IPV4_RE = /^\d{1,3}(\.\d{1,3}){3}$/;
 // A Host header is just host[:port]; URL parsing alone would read "evil.example@127.0.0.1" as 127.0.0.1.
 const HOST_HEADER_RE = /^([A-Za-z0-9.-]+|\[[0-9A-Fa-f:.]+\])(:\d{1,5})?$/;
+const SINGLE_LABEL_RE = /^[a-z0-9-]+$/;
 
 /**
  * DNS-rebinding guard for the unauthenticated admin. A rebinding attack needs the browser to
  * send the attacker's domain name as Host, so only names we know are accepted: localhost,
- * IP literals (handy for opening the admin from a phone in the same LAN) and ALLOWED_HOSTS.
+ * IP literals (handy for opening the admin from a phone in the same LAN), single-label machine
+ * names such as "devbox" (not registrable, so an attacker can't point one at us) and ALLOWED_HOSTS.
  */
 export function isAllowedHost(hostHeader: string | null, allowedHosts = process.env.ALLOWED_HOSTS ?? ''): boolean {
   if (!hostHeader || !HOST_HEADER_RE.test(hostHeader)) return false;
@@ -16,7 +18,7 @@ export function isAllowedHost(hostHeader: string | null, allowedHosts = process.
     return false;
   }
   if (hostname === 'localhost' || hostname.endsWith('.localhost')) return true;
-  if (IPV4_RE.test(hostname) || hostname.startsWith('[')) return true;
+  if (IPV4_RE.test(hostname) || hostname.startsWith('[') || SINGLE_LABEL_RE.test(hostname)) return true;
   return allowedHosts
     .split(',')
     .map((h) => h.trim().toLowerCase())

@@ -8,6 +8,7 @@ import { Alert, EmptyState } from '@/components/ui/feedback';
 import { FieldError, Label, TextArea, TextInput } from '@/components/ui/inputs';
 import { IconForm, IconPlus } from '@/components/ui/icons';
 import { FieldCard } from './FieldCard';
+import { swapped } from '@/lib/list';
 import { PALETTE_ID, clearFieldErrors, fieldElId, moveElId, omit, summaryElId, type EditorErrors } from './errors';
 
 export interface Draft {
@@ -86,11 +87,7 @@ export function BuilderTab({
     const j = index + dir;
     const field = fields[index];
     if (!field || j < 0 || j >= fields.length) return;
-    setFields((list) => {
-      const next = [...list];
-      [next[index], next[j]] = [next[j], next[index]];
-      return next;
-    });
+    setFields((list) => swapped(list, index, j));
     // Keep focus on the same card's button; at the edge that button is inert, so use the opposite one.
     const atEdge = (dir === -1 && j === 0) || (dir === 1 && j === fields.length - 1);
     const button = dir === -1 ? (atEdge ? 'down' : 'up') : atEdge ? 'up' : 'down';
@@ -99,8 +96,8 @@ export function BuilderTab({
   }
 
   function duplicate(index: number) {
-    if (full) return;
     const src = fields[index];
+    if (full || !src) return;
     const copy: Field = {
       ...src,
       id: generateId(),
@@ -212,7 +209,7 @@ export function BuilderTab({
           </div>
 
           {errors.fields ? (
-            <Alert tone="error" role="alert" className="mb-3">
+            <Alert tone="error" className="mb-3">
               <span id="fields-error">{errors.fields}</span>
             </Alert>
           ) : null}

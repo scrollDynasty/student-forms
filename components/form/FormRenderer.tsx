@@ -1,14 +1,11 @@
 'use client';
 
 import { useRef, useState, type FormEvent, type ReactNode, type SyntheticEvent } from 'react';
-import { LIMITS, isChoiceType, validateAnswers, type Answers, type ErrorMap, type Field } from '@/lib/schema';
+import { LIMITS, formatValue, validateAnswers, type Answers, type ErrorMap, type Field } from '@/lib/schema';
+import { UNPARSED_MESSAGES, pruneAnswers, withUnparsed, type DraftAnswers, type DraftValue } from '@/lib/answers';
 import { buttonClasses } from '@/components/ui/Button';
 import { Spinner } from '@/components/ui/feedback';
 import { IconAlert } from '@/components/ui/icons';
-
-/** What the user has typed so far; number fields stay strings until validateAnswers converts them. */
-export type DraftValue = string | boolean | string[];
-export type DraftAnswers = Record<string, DraftValue>;
 
 export type SubmitOutcome = { ok: true } | { ok: false; fieldErrors?: ErrorMap; message?: string };
 
@@ -18,69 +15,9 @@ export interface RenderableForm {
   fields: Field[];
 }
 
-export const controlId = (fieldId: string) => `q-${fieldId}`;
-
-/** Keeps answers only for fields (and options) that still exist with the same type. */
-function pruneAnswers(answers: DraftAnswers, prevFields: Field[], fields: Field[]): DraftAnswers {
-  const prevType = new Map(prevFields.map((f) => [f.id, f.type]));
-  const out: DraftAnswers = {};
-  for (const f of fields) {
-    if (!(f.id in answers) || prevType.get(f.id) !== f.type) continue;
-    const v = answers[f.id];
-    if (isChoiceType(f.type)) {
-      const ids = new Set(f.options.map((o) => o.id));
-      if (Array.isArray(v)) out[f.id] = v.filter((id) => ids.has(id));
-      else if (typeof v === 'string' && ids.has(v)) out[f.id] = v;
-    } else {
-      out[f.id] = v;
-    }
-  }
-  return out;
-}
-
-/** Turns untrusted stored data (a restored draft) into answers that fit the current fields. */
-export function sanitizeAnswers(raw: unknown, fields: Field[]): DraftAnswers {
-  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return {};
-  const src = raw as Record<string, unknown>;
-  const out: DraftAnswers = {};
-  for (const f of fields) {
-    if (!Object.prototype.hasOwnProperty.call(src, f.id)) continue;
-    const v = src[f.id];
-    if (f.type === 'checkbox') {
-      if (typeof v === 'boolean') out[f.id] = v;
-    } else if (f.type === 'multi_select') {
-      if (Array.isArray(v)) {
-        const ids = new Set(f.options.map((o) => o.id));
-        out[f.id] = v.filter((x): x is string => typeof x === 'string' && ids.has(x));
-      }
-    } else if (f.type === 'select' || f.type === 'radio') {
-      if (typeof v === 'string' && f.options.some((o) => o.id === v)) out[f.id] = v;
-    } else if (typeof v === 'string') {
-      out[f.id] = v.slice(0, LIMITS.long_text);
-    }
-  }
-  return out;
-}
+const controlId = (fieldId: string) => `q-${fieldId}`;
 
 const hasErrors = (e: ErrorMap) => Object.keys(e).length > 0;
-
-// <input type="number"> and <input type="date"> report value "" for text they can't parse ("1-2", a date
-// with only the day typed), so without this check such an answer would be sent as empty.
-const UNPARSED_MESSAGES: Partial<Record<Field['type'], string>> = {
-  number: 'Введите число',
-  date: 'Введите дату полностью',
-};
-
-/** Errors for fields whose control holds unparsable text; they win over errors computed from the value. */
-function withUnparsed(errors: ErrorMap, fields: Field[], unparsed: ReadonlySet<string>): ErrorMap {
-  if (unparsed.size === 0) return errors;
-  const out = { ...errors };
-  for (const f of fields) {
-    const message = UNPARSED_MESSAGES[f.type];
-    if (message && unparsed.has(f.id)) out[f.id] = message;
-  }
-  return out;
-}
 
 /** Reads the controls themselves: a partly typed date changes no value, so no change event reports it. */
 function unparsedFieldIds(form: HTMLFormElement, fields: Field[]): Set<string> {
@@ -218,7 +155,13 @@ export function FormRenderer({
       ) : null}
 
       <div className="rounded-[36px] bg-neutral-100 px-5 pb-7 pt-8 shadow-sm @lg:px-9 @lg:pb-9 @lg:pt-10">
-        <Heading className="m-0 text-[30px] text-pretty break-words @lg:text-[36px]">{form.title || 'Без названия'}</Heading>
+        <Heading
+          id={mode === 'public' ? 'form-heading' : undefined}
+          tabIndex={-1}
+          className="m-0 text-[30px] text-pretty break-words outline-none @lg:text-[36px]"
+        >
+          {form.title || 'Без названия'}
+        </Heading>
         {form.description ? (
           <p className="mb-0 mt-3.5 whitespace-pre-wrap break-words text-base leading-[1.6] text-neutral-800">{form.description}</p>
         ) : null}
@@ -344,7 +287,7 @@ function RequiredMark({ required }: { required: boolean }) {
 // Option cards: the card shows the focus ring for the native control inside it.
 const optionCardBase =
   'flex cursor-pointer items-center gap-3 border bg-bg px-5 text-base transition-colors ' +
-  'has-[:focus-visible]:outline-2 has-[:focus-visible]:outline-offset-2 has-[:focus-visible]:outline-accent has-[:focus-visible]:outline-solid ';
+  'has-[:focus-visible]:outline-2 has-[:focus-visible]:outline-offset-2 has-[:focus-visible]:outline-accent-600 has-[:focus-visible]:outline-solid ';
 const nativeChoice = 'size-5 shrink-0 cursor-pointer accent-accent-700 focus-visible:outline-none';
 
 function FieldControl({
@@ -366,7 +309,9 @@ function FieldControl({
   const id = controlId(field.id);
   const hintId = `${id}-hint`;
   const errorId = `${id}-error`;
-  const describedBy = [field.hint ? hintId : null, error ? errorId : null].filter(Boolean).join(' ') || undefined;
+  const rangeId = `${id}-range`;
+  const hasRange = field.type === 'number' && (field.min !== null || field.max !== null);
+  const describedBy = [field.hint ? hintId : null, hasRange ? rangeId : null, error ? errorId : null].filter(Boolean).join(' ') || undefined;
   const invalid = Boolean(error);
   const label = field.label || 'Вопрос без названия';
   const str = typeof value === 'string' ? value : '';
@@ -583,16 +528,16 @@ function FieldControl({
       );
   }
 
-  const rangeHint =
-    field.type === 'number' && (field.min !== null || field.max !== null) ? (
-      <p className="mb-0 mt-1 text-sm text-neutral-700">
-        {field.min !== null && field.max !== null
-          ? `От ${field.min} до ${field.max}`
-          : field.min !== null
-            ? `Не меньше ${field.min}`
-            : `Не больше ${field.max}`}
-      </p>
-    ) : null;
+  const num = (n: number | null) => formatValue(field, n);
+  const rangeHint = hasRange ? (
+    <p id={rangeId} className="mb-0 mt-1 text-sm text-neutral-700">
+      {field.min !== null && field.max !== null
+        ? `От ${num(field.min)} до ${num(field.max)}`
+        : field.min !== null
+          ? `Не меньше ${num(field.min)}`
+          : `Не больше ${num(field.max)}`}
+    </p>
+  ) : null;
 
   return (
     <div>

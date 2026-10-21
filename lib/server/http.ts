@@ -1,6 +1,6 @@
 import type { ErrorMap } from '../schema';
 
-export const MAX_BODY_BYTES = 200 * 1024;
+const MAX_BODY_BYTES = 200 * 1024;
 
 /** An error that maps 1:1 to the `{ error: { code, message, fields? } }` API format. */
 export class ApiError extends Error {
@@ -10,16 +10,17 @@ export class ApiError extends Error {
     message: string,
     readonly fields?: ErrorMap,
     readonly extra?: Record<string, unknown>,
+    readonly headers?: Record<string, string>,
   ) {
     super(message);
   }
 }
 
-export const notFound = (what = 'Ресурс') => new ApiError(404, 'NOT_FOUND', `${what} не найден(а)`);
+export const notFound = (message = 'Не найдено') => new ApiError(404, 'NOT_FOUND', message);
 export const validationError = (fields: ErrorMap, message = 'Проверьте правильность заполнения') =>
   new ApiError(400, 'VALIDATION_ERROR', message, fields);
 
-/** Reads the body as UTF-8, aborting as soon as it exceeds the limit (chunked bodies included). */
+/** Reads the body as UTF-8 (a leading BOM is dropped), aborting as soon as it exceeds the limit (chunked bodies included). */
 async function readLimitedText(request: Request): Promise<string> {
   const declared = Number(request.headers.get('content-length'));
   if (Number.isFinite(declared) && declared > MAX_BODY_BYTES) throw tooLarge();
@@ -37,18 +38,32 @@ async function readLimitedText(request: Request): Promise<string> {
     }
     chunks.push(value);
   }
-  return Buffer.concat(chunks).toString('utf8');
+  return new TextDecoder().decode(Buffer.concat(chunks));
+}
+
+// application/json, or a structured syntax suffix such as application/merge-patch+json.
+const JSON_TYPE_RE = /^application\/(?:[\w.+-]+\+)?json\s*(?:;|$)/i;
+
+/** A body in another media type would also make a cross-site "simple" request that needs no CORS preflight. */
+function assertJsonType(request: Request): void {
+  if (!JSON_TYPE_RE.test(request.headers.get('content-type') ?? '')) {
+    throw new ApiError(415, 'UNSUPPORTED_MEDIA_TYPE', 'Тело запроса должно быть в формате JSON (Content-Type: application/json)');
+  }
 }
 
 /** Like readJsonObject, but an empty body is allowed and reads as {}. */
 export async function readOptionalJsonObject(request: Request): Promise<Record<string, unknown>> {
   const text = await readLimitedText(request);
-  return text.trim() === '' ? {} : parseJsonObject(text);
+  if (text.trim() === '') return {};
+  assertJsonType(request);
+  return parseJsonObject(text);
 }
 
 /** Reads a JSON object body with a size limit; anything else is a 4xx ApiError. */
 export async function readJsonObject(request: Request): Promise<Record<string, unknown>> {
-  return parseJsonObject(await readLimitedText(request));
+  const text = await readLimitedText(request);
+  assertJsonType(request);
+  return parseJsonObject(text);
 }
 
 function parseJsonObject(text: string): Record<string, unknown> {
@@ -67,11 +82,16 @@ function parseJsonObject(text: string): Record<string, unknown> {
 const tooLarge = () =>
   new ApiError(413, 'PAYLOAD_TOO_LARGE', `Слишком большой запрос (максимум ${MAX_BODY_BYTES / 1024} КБ)`);
 
+const forbiddenOrigin = () => new ApiError(403, 'FORBIDDEN_ORIGIN', 'Запрос с другого сайта отклонён');
+
 /**
  * The admin API has no auth (by the task's requirement), so at least stop other sites from
- * driving it through a visitor's browser: browsers always send Origin on cross-site requests.
+ * driving it through a visitor's browser: browsers send Origin on cross-site requests, and
+ * modern ones also say where a request comes from in Sec-Fetch-Site.
  */
 export function assertSameOrigin(request: Request): void {
+  const site = request.headers.get('sec-fetch-site');
+  if (site && site !== 'same-origin' && site !== 'none') throw forbiddenOrigin();
   const origin = request.headers.get('origin');
   if (!origin) return; // curl, tests and same-origin GETs
   // Only the Host the browser connected to counts: X-Forwarded-Host is client-controlled without a proxy.
@@ -82,9 +102,7 @@ export function assertSameOrigin(request: Request): void {
   } catch {
     /* "null" or garbage */
   }
-  if (!host || originHost !== host) {
-    throw new ApiError(403, 'FORBIDDEN_ORIGIN', 'Запрос с другого сайта отклонён');
-  }
+  if (!host || originHost !== host) throw forbiddenOrigin();
 }
 
 type Bucket = { count: number; resetAt: number };
@@ -95,8 +113,8 @@ const clientBuckets = new Map<string, Bucket>();
 const MAX_BUCKETS = 10_000;
 const WINDOW_MS = 60_000;
 
-/** Counts one hit in a fixed one-minute window; true when the key is over its limit. */
-function hit(buckets: Map<string, Bucket>, key: string, limit: number, evictLive: boolean): boolean {
+/** Counts one hit in a fixed one-minute window; returns when the window resets if the key is over its limit. */
+function hit(buckets: Map<string, Bucket>, key: string, limit: number, evictLive: boolean): number | null {
   const t = Date.now();
   if (buckets.size >= MAX_BUCKETS) {
     for (const [k, b] of buckets) if (b.resetAt <= t) buckets.delete(k);
@@ -109,9 +127,9 @@ function hit(buckets: Map<string, Bucket>, key: string, limit: number, evictLive
   const bucket = buckets.get(key);
   if (!bucket || bucket.resetAt <= t) {
     buckets.set(key, { count: 1, resetAt: t + WINDOW_MS });
-    return false;
+    return null;
   }
-  return ++bucket.count > limit;
+  return ++bucket.count > limit ? bucket.resetAt : null;
 }
 
 /**
@@ -125,14 +143,19 @@ export function rateLimit(request: Request, scope: string, perClient: number, pe
   const client = (request.headers.get('x-forwarded-for')?.split(',')[0]?.trim() || 'unknown').slice(0, 64);
   const overScope = hit(scopeBuckets, scope, perScope, false);
   const overClient = hit(clientBuckets, `${scope}|${client}`, perClient, true);
-  if (overScope || overClient) {
-    throw new ApiError(429, 'RATE_LIMITED', 'Слишком много запросов. Попробуйте через минуту.');
+  if (overScope !== null || overClient !== null) {
+    const resetAt = Math.max(overScope ?? 0, overClient ?? 0);
+    const retryAfter = String(Math.max(1, Math.ceil((resetAt - Date.now()) / 1000)));
+    throw new ApiError(429, 'RATE_LIMITED', 'Слишком много запросов. Попробуйте через минуту.', undefined, undefined, {
+      'Retry-After': retryAfter,
+    });
   }
 }
 
 const NO_STORE = { 'Cache-Control': 'no-store' };
 
-export const json = (data: unknown, status = 200) => Response.json(data, { status, headers: NO_STORE });
+export const json = (data: unknown, status = 200, headers?: Record<string, string>) =>
+  Response.json(data, { status, headers: { ...NO_STORE, ...headers } });
 export const noContent = () => new Response(null, { status: 204, headers: NO_STORE });
 
 /** Wraps a route handler body: ApiError → JSON error, anything else → logged 500. */
@@ -142,7 +165,7 @@ export async function handle(fn: () => Promise<Response>): Promise<Response> {
   } catch (err) {
     if (err instanceof ApiError) {
       const error = { code: err.code, message: err.message, ...(err.fields ? { fields: err.fields } : {}) };
-      return json({ error, ...err.extra }, err.status);
+      return json({ ...err.extra, error }, err.status, err.headers);
     }
     console.error('[api] unexpected error', err);
     return json({ error: { code: 'INTERNAL', message: 'Внутренняя ошибка сервера' } }, 500);

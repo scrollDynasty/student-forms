@@ -110,7 +110,7 @@ describe('forms API', () => {
       ['GET', '/api/forms/nope'], ['PUT', '/api/forms/nope'], ['POST', '/api/forms/nope/publish'],
       ['DELETE', '/api/forms/nope'], ['GET', '/api/forms/nope/responses'], ['GET', '/api/forms/nope/analytics'],
       ['GET', '/api/public/forms/nope'], ['POST', '/api/public/forms/nope/responses'], ['GET', '/api/whatever'],
-    ]) {
+    ] as const) {
       const r = await srv.call(method, url, method === 'GET' || method === 'DELETE' ? undefined : { title: 'x' });
       assert.equal(r.status, 404, `${method} ${url}`);
       assert.equal(r.json.error.code, 'NOT_FOUND');
@@ -259,8 +259,8 @@ describe('forms API', () => {
     const bytes = new Uint8Array(await (await fetch(`${srv.base}/api/forms/${form.id}/responses/csv`)).arrayBuffer());
     assert.deepEqual([...bytes.slice(0, 3)], [0xef, 0xbb, 0xbf]);
     const [header, row] = r.text.trim().split('\r\n');
-    assert.ok(header.startsWith('Дата отправки;ФИО;Email'));
-    assert.ok(row.includes(`"'=HYPERLINK(""x"");""квоты"""`));
+    assert.ok(header?.startsWith('Дата отправки (UTC);ФИО;Email'));
+    assert.ok(row?.includes(`"'=HYPERLINK(""x"");""квоты"""`));
   });
 
   test('CSV keeps answers given before a field type change in their own column', async () => {
@@ -276,18 +276,18 @@ describe('forms API', () => {
     assert.equal((await srv.call('POST', url, { answers: { city: 'Казань' }, submissionId: randomUUID() })).status, 201);
 
     const rows = (await srv.call('GET', `/api/forms/${form.id}/responses/csv`)).text.trim().split('\r\n').map((l) => l.split(';'));
-    assert.deepEqual(rows[0], ['Дата отправки', 'Город', 'Город (прежний тип: Выпадающий список)']);
+    assert.deepEqual(rows[0], ['Дата отправки (UTC)', 'Город', 'Город (прежний тип: Выпадающий список)']);
     const [newer, older] = rows.slice(1);
-    assert.deepEqual(newer.slice(1), ['Казань', '']);
-    assert.deepEqual(older.slice(1), ['', 'Москва']);
+    assert.deepEqual(newer?.slice(1), ['Казань', '']);
+    assert.deepEqual(older?.slice(1), ['', 'Москва']);
 
     // Once the field is deleted, both of its past types stay distinguishable.
     const current = (await srv.call('GET', `/api/forms/${form.id}`)).json.form;
     await srv.call('PUT', `/api/forms/${form.id}`, {
       title: form.title, fields: [{ id: 'other', type: 'short_text', label: 'Другое' }], version: current.version,
     });
-    const header = (await srv.call('GET', `/api/forms/${form.id}/responses/csv`)).text.trim().split('\r\n')[0].split(';');
-    assert.deepEqual(header, ['Дата отправки', 'Другое', 'Город (удалено)', 'Город (удалено, Выпадающий список)']);
+    const header = (await srv.call('GET', `/api/forms/${form.id}/responses/csv`)).text.trim().split('\r\n')[0]?.split(';');
+    assert.deepEqual(header, ['Дата отправки (UTC)', 'Другое', 'Город (удалено)', 'Город (удалено, Выпадающий список)']);
   });
 
   test('publish and unpublish answer 404 for an unknown form before reading the body', async () => {
@@ -444,6 +444,80 @@ describe('forms API', () => {
     assert.equal(statuses.at(-1), 429);
     const limited = await srv.call('POST', url, { answers: VALID, submissionId: randomUUID() });
     assert.equal(limited.json.error.code, 'RATE_LIMITED');
+    const retryAfter = Number(limited.headers.get('retry-after'));
+    assert.ok(retryAfter >= 1 && retryAfter <= 60, `Retry-After: ${retryAfter}`);
+  });
+
+  test('JSON bodies need a JSON content type (415), a UTF-8 BOM is tolerated', async () => {
+    const post = (contentType: string | null, body: string) =>
+      fetch(`${srv.base}/api/forms`, { method: 'POST', headers: contentType ? { 'content-type': contentType } : {}, body });
+    const plain = await post('text/plain', '{"title":"x"}');
+    assert.equal(plain.status, 415);
+    assert.equal((await plain.json()).error.code, 'UNSUPPORTED_MEDIA_TYPE');
+    assert.equal((await post(null, '{"title":"x"}')).status, 415);
+    assert.equal((await post('application/json; charset=utf-8', '﻿{"title":"С BOM"}')).status, 201);
+    // Bodiless actions keep working without a content type.
+    const form = (await srv.call('POST', '/api/forms', { title: 'T', fields: FIELDS })).json.form;
+    assert.equal((await fetch(`${srv.base}/api/forms/${form.id}/publish`, { method: 'POST' })).status, 200);
+  });
+
+  test('cross-site requests are refused by Sec-Fetch-Site even without Origin', async () => {
+    const r = await fetch(`${srv.base}/api/forms`, {
+      method: 'POST', headers: { 'content-type': 'application/json', 'sec-fetch-site': 'cross-site' }, body: '{"title":"x"}',
+    });
+    assert.equal(r.status, 403);
+    assert.equal((await r.json()).error.code, 'FORBIDDEN_ORIGIN');
+    const same = await fetch(`${srv.base}/api/forms`, {
+      method: 'POST', headers: { 'content-type': 'application/json', 'sec-fetch-site': 'same-origin' }, body: '{"title":"x"}',
+    });
+    assert.equal(same.status, 201);
+  });
+
+  test('version fields of the wrong type are a 400, not a conflict or a silent pass', async () => {
+    const form = await createPublished();
+    const put = await srv.call('PUT', `/api/forms/${form.id}`, { title: 'T', fields: FIELDS, version: 'abc' });
+    assert.equal(put.status, 400);
+    assert.ok(put.json.error.fields.version);
+    assert.equal((await srv.call('POST', `/api/forms/${form.id}/publish`, { version: '1' })).status, 400);
+    // An explicit null is a client bug, not "skip the conflict check".
+    assert.equal((await srv.call('PUT', `/api/forms/${form.id}`, { title: 'T', fields: FIELDS, version: null })).status, 400);
+    const submit = await srv.call('POST', `/api/public/forms/${form.publicId}/responses`, {
+      answers: VALID, submissionId: randomUUID(), formVersion: '99',
+    });
+    assert.equal(submit.status, 400);
+    assert.ok(submit.json.error.fields.formVersion);
+  });
+
+  test('404 messages are grammatical Russian', async () => {
+    assert.equal((await srv.call('GET', `/api/forms/${randomUUID()}`)).json.error.message, 'Форма не найдена');
+    assert.equal((await srv.call('GET', '/api/nope')).json.error.message, 'Маршрут API не найден');
+  });
+
+  test('CSV dates use the time zone the manager asks for and say which one', async () => {
+    const form = await createPublished();
+    await srv.call('POST', `/api/public/forms/${form.publicId}/responses`, { answers: VALID, submissionId: randomUUID() });
+    const { submittedAt } = (await srv.call('GET', `/api/forms/${form.id}/responses`)).json.responses[0];
+    const csv = async (query: string) => (await srv.call('GET', `/api/forms/${form.id}/responses/csv${query}`)).text.trim().split('\r\n');
+    const inZone = (timeZone: string) =>
+      new Intl.DateTimeFormat('ru-RU', { dateStyle: 'short', timeStyle: 'medium', timeZone }).format(new Date(submittedAt));
+
+    const [moscowHeader, moscowRow] = await csv('?tz=Europe/Moscow');
+    assert.ok(moscowHeader?.startsWith('Дата отправки (Europe/Moscow);'));
+    assert.ok(moscowRow?.startsWith(`${inZone('Europe/Moscow')};`));
+    for (const query of ['', '?tz=Not/AZone']) {
+      const [header, row] = await csv(query);
+      assert.ok(header?.startsWith('Дата отправки (UTC);'), query);
+      assert.ok(row?.startsWith(`${inZone('UTC')};`), query);
+    }
+  });
+
+  test('text answers with control characters are rejected', async () => {
+    const form = await createPublished();
+    const r = await srv.call('POST', `/api/public/forms/${form.publicId}/responses`, {
+      answers: { ...VALID, name: 'Анна\u0000' }, submissionId: randomUUID(),
+    });
+    assert.equal(r.status, 400);
+    assert.ok(r.json.error.fields.name);
   });
   test('a submission with an unseen sessionId keeps the funnel consistent', async () => {
     const form = await createPublished();
@@ -584,7 +658,12 @@ describe('forms API', () => {
     for (const url of ['/admin', '/f/abcdef1234', '/api/forms']) {
       const r = await fetch(`${srv.base}${url}`);
       assert.equal(r.headers.get('x-frame-options'), 'DENY', url);
-      assert.match(r.headers.get('content-security-policy') ?? '', /frame-ancestors 'none'/, url);
+      const csp = r.headers.get('content-security-policy') ?? '';
+      for (const directive of ["frame-ancestors 'none'", "default-src 'self'", "object-src 'none'", "base-uri 'self'"]) {
+        assert.ok(csp.includes(directive), `${url}: ${directive}`);
+      }
+      assert.ok(!csp.includes('unsafe-eval'), `${url}: no unsafe-eval in production`);
+      assert.match(r.headers.get('permissions-policy') ?? '', /camera=\(\)/, url);
       assert.equal(r.headers.get('x-content-type-options'), 'nosniff', url);
       assert.ok(r.headers.get('referrer-policy'), url);
       assert.equal(r.headers.get('x-powered-by'), null, url);

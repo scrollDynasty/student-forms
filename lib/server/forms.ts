@@ -18,24 +18,31 @@ const MAX_RESPONSES_PER_FORM = 10_000;
 const EVENT_TYPES = new Set(['view', 'start', 'field']);
 
 const now = () => new Date().toISOString();
+/** ISO-8601 UTC timestamps sort as plain strings; newest first. */
+const byNewest = (a: string, b: string) => (a < b ? 1 : a > b ? -1 : 0);
 const hasErrors = (errors: object) => Object.keys(errors).length > 0;
 const isUuid = (v: unknown): v is string => typeof v === 'string' && UUID_RE.test(v);
 
 function findForm(data: DbData, id: string): StoredForm {
   const form = data.forms.find((f) => f.id === id);
-  if (!form) throw notFound('Форма');
+  if (!form) throw notFound('Форма не найдена');
   return form;
 }
 
 function findByPublicId(data: DbData, publicId: string): StoredForm {
   const form = data.forms.find((f) => f.publicId === publicId);
-  if (!form) throw notFound('Форма');
+  if (!form) throw notFound('Форма не найдена');
   return form;
 }
 
+const isVersion = (v: unknown) => Number.isInteger(v) && (v as number) >= 1;
+const VERSION_MESSAGE = 'Версия должна быть целым положительным числом';
+
 /** Optimistic locking: a client that sends the version it last saw must not overwrite newer changes. */
 function assertCurrentVersion(form: StoredForm, version: unknown) {
-  if (version != null && version !== form.version) {
+  if (version === undefined) return;
+  if (!isVersion(version)) throw validationError({ version: VERSION_MESSAGE });
+  if (version !== form.version) {
     throw new ApiError(409, 'VERSION_CONFLICT', 'Форму уже изменили в другой вкладке. Загрузите актуальную версию.');
   }
 }
@@ -67,7 +74,7 @@ export function listForms(store: JsonStore) {
       updatedAt: f.updatedAt,
       publishedAt: f.publishedAt,
     }))
-    .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
+    .sort((a, b) => byNewest(a.updatedAt, b.updatedAt));
 }
 
 export function countResponses(store: JsonStore, formId: string): number {
@@ -152,7 +159,7 @@ function responsesOf(data: DbData, formId: string): StoredResponse[] {
   return data.responses
     .filter((r) => r.formId === formId)
     .reverse()
-    .sort((a, b) => b.submittedAt.localeCompare(a.submittedAt));
+    .sort((a, b) => byNewest(a.submittedAt, b.submittedAt));
 }
 
 export function listResponses(store: JsonStore, id: string) {
@@ -181,7 +188,20 @@ function csvCell(value: string, field?: Field): string {
   return /[";\r\n]/.test(v) ? `"${v.replace(/"/g, '""')}"` : v;
 }
 
-export function responsesCsv(store: JsonStore, id: string) {
+/** A valid IANA time zone in its canonical spelling, or UTC. */
+export function csvTimeZone(requested: string | null): string {
+  if (requested) {
+    try {
+      return new Intl.DateTimeFormat('en', { timeZone: requested }).resolvedOptions().timeZone;
+    } catch {
+      // RangeError: unknown time zone
+    }
+  }
+  return 'UTC';
+}
+
+/** `timeZone` is the manager's (the admin passes the browser's), so CSV times match what the admin shows. */
+export function responsesCsv(store: JsonStore, id: string, timeZone = 'UTC') {
   const form = findForm(store.data, id);
   const responses = responsesOf(store.data, id);
 
@@ -205,8 +225,8 @@ export function responsesCsv(store: JsonStore, id: string) {
     }
   }
 
-  const dateFmt = new Intl.DateTimeFormat('ru-RU', { dateStyle: 'short', timeStyle: 'medium' });
-  const lines = [['Дата отправки', ...columns.map((c) => c.label)].map((h) => csvCell(h)).join(';')];
+  const dateFmt = new Intl.DateTimeFormat('ru-RU', { dateStyle: 'short', timeStyle: 'medium', timeZone });
+  const lines = [[`Дата отправки (${timeZone})`, ...columns.map((c) => c.label)].map((h) => csvCell(h)).join(';')];
   for (const r of responses) {
     const byKey = new Map(r.fields.map((f) => [columnKey(f), f]));
     const cells = columns.map((c) => {
@@ -259,6 +279,9 @@ export function submitResponse(
     if (!isUuid(body.submissionId)) {
       throw validationError({ submissionId: 'Некорректный идентификатор отправки' });
     }
+    if (body.formVersion !== undefined && !isVersion(body.formVersion)) {
+      throw validationError({ formVersion: VERSION_MESSAGE });
+    }
     const submissionId = body.submissionId.toLowerCase();
     // Idempotency first: a retry of an accepted submission is acknowledged even if the form changed since.
     const duplicate = data.responses.find((r) => r.formId === form.id && r.submissionId === submissionId);
@@ -268,7 +291,7 @@ export function submitResponse(
     }
 
     if (form.status !== 'published') throw notPublished();
-    if (typeof body.formVersion === 'number' && body.formVersion !== form.version) {
+    if (body.formVersion !== undefined && body.formVersion !== form.version) {
       throw new ApiError(409, 'FORM_CHANGED', 'Форма была обновлена. Проверьте ответы и отправьте ещё раз.', undefined, {
         form: toPublicForm(form),
       });

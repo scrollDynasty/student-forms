@@ -1,6 +1,6 @@
 // Maps validation errors keyed by index ("fields.2.options.1") to errors keyed by stable field/option ids,
 // so they survive reordering while the manager fixes them.
-import type { ErrorMap, Field } from '@/lib/schema';
+import { DEFAULT_QUESTION_LABEL, isDefaultOptionLabel, type ErrorMap, type Field } from '@/lib/schema';
 
 export type FieldProp = 'label' | 'hint' | 'placeholder' | 'type' | 'options' | 'min' | 'max';
 
@@ -119,4 +119,20 @@ export function omit<T>(rec: Record<string, T>, key: string): Record<string, T> 
   const copy = { ...rec };
   delete copy[key];
   return copy;
+}
+
+/**
+ * Placeholder texts a form would be published with («Новый вопрос», «Вариант 1»…), one line per question.
+ * Publishing is still allowed (a manager may mean it), but only after confirming.
+ */
+export function templateTexts(fields: Field[]): string[] {
+  const out: string[] = [];
+  fields.forEach((f, i) => {
+    const parts: string[] = [];
+    if (f.label.trim() === DEFAULT_QUESTION_LABEL) parts.push(`текст «${DEFAULT_QUESTION_LABEL}»`);
+    const options = f.options.filter((o) => isDefaultOptionLabel(o.label));
+    if (options.length > 0) parts.push(`варианты ${options.map((o) => `«${o.label.trim()}»`).join(', ')}`);
+    if (parts.length > 0) out.push(`Вопрос ${i + 1}: ${parts.join('; ')}`);
+  });
+  return out;
 }

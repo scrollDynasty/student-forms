@@ -24,7 +24,7 @@ describe('JsonStore', () => {
     });
     assert.equal(result, 42);
     const again = await JsonStore.open(dir('reload'));
-    assert.equal(again.data.sessions[0].id, 's1');
+    assert.equal(again.data.sessions[0]?.id, 's1');
   });
 
   test('serializes concurrent mutations: every change persisted, no temp files, valid JSON', async () => {
@@ -132,7 +132,7 @@ describe('JsonStore', () => {
     assert.deepEqual(store.data.forms, []);
     const backups = fs.readdirSync(dir('corrupt')).filter((f) => f.startsWith('db.corrupt-'));
     assert.equal(backups.length, 1);
-    assert.equal(fs.readFileSync(path.join(dir('corrupt'), backups[0]), 'utf8'), '{"forms": [ broken');
+    assert.equal(fs.readFileSync(path.join(dir('corrupt'), backups[0] ?? ''), 'utf8'), '{"forms": [ broken');
   });
 
   test('treats a structurally invalid file as corrupted', async () => {

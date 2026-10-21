@@ -200,16 +200,20 @@ export function ResponsesTab({
         }
       >
         {open ? (
-          <div className="grid gap-1.5">
+          <div className="grid grid-cols-1 gap-1.5">
+            {/* «Более старый / новый ответ» keep focus on the button: say which response is shown now. */}
+            <p className="sr-only" aria-live="polite">
+              {`Ответ №${total - openIndex}, отправлен ${formatDateTime(open.submittedAt)}`}
+            </p>
             {open.formVersion !== formVersion ? (
               <Alert tone="info" className="mb-1.5">
                 Отправлен в предыдущей версии формы (v{open.formVersion}). Вопросы показаны так, как их видел студент.
               </Alert>
             ) : null}
-            <dl className="m-0 grid gap-1.5">
+            <dl className="m-0 grid grid-cols-1 gap-1.5">
               {open.items.map((it) => (
                 <div key={it.fieldId} className="rounded-[22px] bg-bg px-[18px] py-3.5">
-                  <dt className="text-[13px] text-neutral-700">{it.label}</dt>
+                  <dt className="break-words text-[13px] text-neutral-700">{it.label}</dt>
                   <dd className="m-0 mt-1 whitespace-pre-wrap break-words text-base">{it.display}</dd>
                 </div>
               ))}
