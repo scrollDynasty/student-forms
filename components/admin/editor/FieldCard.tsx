@@ -15,8 +15,8 @@ import {
 } from '@/lib/schema';
 import { Button, IconButton } from '@/components/ui/Button';
 import { FieldError, Label, TextInput, Toggle, inputClasses } from '@/components/ui/inputs';
-import { IconArrowDown, IconArrowUp, IconChevronDown, IconCopy, IconPlus, IconTrash, IconX } from '@/components/ui/icons';
-import { fieldElId, hasFieldErrors, optElId, summaryElId, type FieldErrors } from './errors';
+import { IconArrowDown, IconArrowUp, IconChevronUp, IconCopy, IconPlus, IconTrash, IconX } from '@/components/ui/icons';
+import { fieldElId, hasFieldErrors, moveElId, optElId, summaryElId, type FieldErrors } from './errors';
 
 export function nextOptionLabel(options: Option[]): string {
   const used = new Set(options.map((o) => o.label.trim().toLowerCase()));
@@ -25,11 +25,14 @@ export function nextOptionLabel(options: Option[]): string {
   return `Вариант ${n}`;
 }
 
-function TypeIcon({ type }: { type: FieldType }) {
+function TypeIcon({ type, active = false }: { type: FieldType; active?: boolean }) {
   return (
     <span
       aria-hidden="true"
-      className="flex size-8 shrink-0 items-center justify-center rounded-lg bg-accent-soft text-sm font-semibold text-accent"
+      className={
+        'grid size-11 shrink-0 place-items-center rounded-full font-heading text-base font-semibold ' +
+        (active ? 'bg-accent text-bg' : 'bg-accent-100 text-accent-800')
+      }
     >
       {fieldTypeIcon(type)}
     </span>
@@ -75,19 +78,31 @@ export function FieldCard({
   const invalid = hasFieldErrors(errors);
   const num = index + 1;
 
+  const first = index === 0;
+  const last = index === total - 1;
   const actions = (
-    <div className="flex shrink-0 items-center">
-      <IconButton label={`Переместить вопрос ${num} вверх`} disabled={index === 0} onClick={() => onMove(-1)}>
-        <IconArrowUp size={16} />
+    <div className="flex shrink-0 items-center gap-0.5">
+      <IconButton
+        id={moveElId(field.id, 'up')}
+        label={`Переместить вопрос ${num} выше`}
+        aria-disabled={first || undefined}
+        onClick={() => onMove(-1)}
+      >
+        <IconArrowUp size={17} />
       </IconButton>
-      <IconButton label={`Переместить вопрос ${num} вниз`} disabled={index === total - 1} onClick={() => onMove(1)}>
-        <IconArrowDown size={16} />
+      <IconButton
+        id={moveElId(field.id, 'down')}
+        label={`Переместить вопрос ${num} ниже`}
+        aria-disabled={last || undefined}
+        onClick={() => onMove(1)}
+      >
+        <IconArrowDown size={17} />
       </IconButton>
-      <IconButton label={`Дублировать вопрос ${num}`} disabled={!canDuplicate} onClick={onDuplicate}>
-        <IconCopy size={16} />
+      <IconButton label={`Дублировать вопрос ${num}`} aria-disabled={!canDuplicate || undefined} onClick={onDuplicate}>
+        <IconCopy size={17} />
       </IconButton>
       <IconButton label={`Удалить вопрос ${num}`} tone="danger" onClick={onDelete}>
-        <IconTrash size={16} />
+        <IconTrash size={17} />
       </IconButton>
     </div>
   );
@@ -96,8 +111,8 @@ export function FieldCard({
     return (
       <li
         className={
-          'flex items-center gap-1 rounded-xl border bg-white py-1.5 pl-2 pr-1 shadow-xs transition-colors ' +
-          (invalid ? 'border-red-300 bg-red-50/40' : 'border-slate-200 hover:border-slate-300')
+          'flex items-center gap-1.5 rounded-full p-2 transition-colors ' +
+          (invalid ? 'bg-accent-100 ring-2 ring-inset ring-accent-700' : 'bg-neutral-100 hover:bg-neutral-200')
         }
       >
         <button
@@ -105,21 +120,21 @@ export function FieldCard({
           type="button"
           onClick={onSelect}
           aria-expanded={false}
-          className="flex min-h-11 min-w-0 flex-1 items-center gap-3 rounded-lg px-1 text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent"
+          className="flex min-w-0 flex-1 cursor-pointer items-center gap-3.5 rounded-full text-left"
         >
           <TypeIcon type={field.type} />
           <span className="min-w-0 flex-1">
-            <span className="block truncate text-sm font-medium text-slate-900">
-              <span className="text-slate-500">{num}.</span> {field.label.trim() || 'Вопрос без текста'}
+            <span className="block truncate text-[15px] font-semibold">
+              <span className="text-neutral-700">{num}.</span> {field.label.trim() || 'Вопрос без текста'}
             </span>
-            <span className="block truncate text-xs text-slate-500">
+            <span className="block truncate text-[13px] text-neutral-700">
               {fieldTypeLabel(field.type)}
               {field.required ? ' · обязательное' : ''}
-              {invalid ? <span className="font-medium text-red-700"> · есть ошибки</span> : null}
+              {invalid ? <span className="font-semibold text-accent-800"> · есть ошибки</span> : null}
             </span>
           </span>
         </button>
-        {actions}
+        <span className="hidden sm:contents">{actions}</span>
       </li>
     );
   }
@@ -160,19 +175,26 @@ export function FieldCard({
   const describe = (p: Parameters<typeof fieldElId>[1]) => (errors?.[p] ? `${id(p)}-error` : undefined);
 
   return (
-    <li className={`rounded-xl border bg-white shadow-sm ring-2 ${invalid ? 'border-red-300 ring-red-100' : 'border-accent/40 ring-accent/10'}`}>
-      <div className="flex items-center gap-2 border-b border-slate-100 py-1.5 pl-3 pr-1">
-        <TypeIcon type={field.type} />
-        <p className="min-w-0 flex-1 truncate text-sm font-medium text-slate-700">
+    <li
+      className={
+        'my-2 grid gap-5 rounded-[32px] bg-neutral-100 px-3.5 pb-6 pt-3.5 shadow-md ring-2 ' +
+        (invalid ? 'ring-accent-700' : 'ring-accent-300')
+      }
+    >
+      <div className="flex flex-wrap items-center gap-x-3.5 gap-y-2">
+        <TypeIcon type={field.type} active />
+        <p className="min-w-0 flex-1 truncate text-sm font-semibold text-neutral-700">
           Вопрос {num} · {fieldTypeLabel(field.type)}
         </p>
-        {actions}
-        <IconButton label="Свернуть вопрос" onClick={onCollapse} aria-expanded={true}>
-          <IconChevronDown size={16} className="rotate-180" />
-        </IconButton>
+        <div className="flex items-center gap-0.5">
+          {actions}
+          <IconButton label="Свернуть вопрос" onClick={onCollapse} aria-expanded={true}>
+            <IconChevronUp size={17} />
+          </IconButton>
+        </div>
       </div>
 
-      <div className="grid gap-5 p-4 sm:p-5">
+      <div className="grid gap-[18px] px-1 sm:px-2.5">
         <div>
           <Label htmlFor={id('label')}>Вопрос</Label>
           <TextInput
@@ -187,7 +209,7 @@ export function FieldCard({
           <FieldError id={`${id('label')}-error`}>{errors?.label}</FieldError>
         </div>
 
-        <div className="grid gap-5 sm:grid-cols-2">
+        <div className="grid grid-cols-[repeat(auto-fit,minmax(220px,1fr))] gap-[18px]">
           <div>
             <Label htmlFor={id('type')}>Тип поля</Label>
             <select
@@ -196,7 +218,7 @@ export function FieldCard({
               aria-invalid={Boolean(errors?.type) || undefined}
               aria-describedby={describe('type')}
               onChange={(e) => changeType(e.target.value as FieldType)}
-              className={inputClasses(Boolean(errors?.type))}
+              className={inputClasses(Boolean(errors?.type), 'cursor-pointer text-[15px]')}
             >
               {FIELD_TYPES.map((t) => (
                 <option key={t.type} value={t.type}>
@@ -208,7 +230,7 @@ export function FieldCard({
           </div>
           {hasPlaceholder(field.type) ? (
             <div>
-              <Label htmlFor={id('placeholder')} hint="(серый текст внутри поля)">
+              <Label htmlFor={id('placeholder')} hint="серый текст внутри поля">
                 Плейсхолдер
               </Label>
               <TextInput
@@ -219,6 +241,7 @@ export function FieldCard({
                 aria-describedby={describe('placeholder')}
                 placeholder="Например: Иван Иванов"
                 onChange={(e) => onChange({ placeholder: e.target.value })}
+                className="text-[15px]"
               />
               <FieldError id={`${id('placeholder')}-error`}>{errors?.placeholder}</FieldError>
             </div>
@@ -226,7 +249,7 @@ export function FieldCard({
         </div>
 
         <div>
-          <Label htmlFor={id('hint')} hint="(необязательно)">
+          <Label htmlFor={id('hint')} hint="необязательно">
             Подсказка
           </Label>
           <TextInput
@@ -237,6 +260,7 @@ export function FieldCard({
             aria-describedby={describe('hint')}
             placeholder="Поясните, что именно нужно указать"
             onChange={(e) => onChange({ hint: e.target.value })}
+            className="text-[15px]"
           />
           <FieldError id={`${id('hint')}-error`}>{errors?.hint}</FieldError>
         </div>
@@ -246,10 +270,10 @@ export function FieldCard({
         ) : null}
 
         {field.type === 'number' ? (
-          <div className="grid gap-5 sm:grid-cols-2">
+          <div className="grid grid-cols-[repeat(auto-fit,minmax(160px,1fr))] gap-[18px]">
             {(['min', 'max'] as const).map((p) => (
               <div key={p}>
-                <Label htmlFor={id(p)} hint="(необязательно)">
+                <Label htmlFor={id(p)} hint="необязательно">
                   {p === 'min' ? 'Минимум' : 'Максимум'}
                 </Label>
                 <TextInput
@@ -265,6 +289,7 @@ export function FieldCard({
                     const n = raw === '' ? null : Number(raw);
                     onChange({ [p]: n === null || Number.isFinite(n) ? n : null });
                   }}
+                  className="text-[15px]"
                 />
                 <FieldError id={`${id(p)}-error`}>{errors?.[p]}</FieldError>
               </div>
@@ -272,7 +297,7 @@ export function FieldCard({
           </div>
         ) : null}
 
-        <div className="flex flex-col gap-4 border-t border-slate-100 pt-4 sm:flex-row sm:items-center sm:justify-between">
+        <div className="flex flex-wrap items-center justify-between gap-4 pt-1">
           <Toggle
             id={`${field.id}-required`}
             checked={field.required}
@@ -280,7 +305,7 @@ export function FieldCard({
             label="Обязательное поле"
             description={field.type === 'checkbox' ? 'Студент должен поставить флажок' : 'Без ответа форму не отправить'}
           />
-          <Button size="sm" variant="ghost" onClick={onCollapse}>
+          <Button onClick={onCollapse} className="px-5">
             Готово
           </Button>
         </div>
@@ -313,10 +338,14 @@ function OptionsEditor({
 
   function move(index: number, dir: -1 | 1) {
     const j = index + dir;
-    if (j < 0 || j >= options.length) return;
+    const opt = options[index];
+    if (!opt || j < 0 || j >= options.length) return;
     const next = [...options];
     [next[index], next[j]] = [next[j], next[index]];
     onChange(next);
+    const atEdge = (dir === -1 && j === 0) || (dir === 1 && j === options.length - 1);
+    const button = dir === -1 ? (atEdge ? 'down' : 'up') : atEdge ? 'up' : 'down';
+    requestFocus(`${optElId(field.id, opt.id)}-${button}`);
   }
 
   function remove(index: number) {
@@ -329,19 +358,20 @@ function OptionsEditor({
 
   return (
     <div role="group" aria-labelledby={groupId}>
-      <p id={groupId} className="mb-1.5 text-sm font-medium text-slate-800">
-        Варианты ответа <span className="font-normal text-slate-500">({options.length} из {LIMITS.options})</span>
+      <p id={groupId} className="mb-2 text-[13px] font-medium text-neutral-700">
+        Варианты ответа · {options.length} из {LIMITS.options}
       </p>
-      <ol className="grid gap-2">
+      <ol className="m-0 grid list-none gap-1.5 p-0">
         {options.map((opt, i) => {
           const err = errors?.opt?.[opt.id];
           const elId = optElId(field.id, opt.id);
           return (
             <li key={opt.id}>
-              <div className="flex items-center gap-1">
-                <span aria-hidden="true" className="w-6 shrink-0 text-right text-sm text-slate-500">
-                  {i + 1}.
-                </span>
+              <div className="flex items-center gap-1 sm:gap-2">
+                <span
+                  aria-hidden="true"
+                  className={`hidden size-[22px] shrink-0 border-2 border-neutral-500 sm:block ${field.type === 'multi_select' ? 'rounded-md' : 'rounded-full'}`}
+                />
                 <TextInput
                   id={elId}
                   value={opt.label}
@@ -356,20 +386,25 @@ function OptionsEditor({
                       addAfter(i);
                     }
                   }}
-                  className="min-w-0 flex-1"
+                  className="min-h-[42px] min-w-0 flex-1 text-[15px]"
                 />
-                <IconButton label={`Вариант ${i + 1} выше`} disabled={i === 0} onClick={() => move(i, -1)}>
+                <IconButton id={`${elId}-up`} label={`Вариант ${i + 1} выше`} aria-disabled={i === 0 || undefined} onClick={() => move(i, -1)}>
                   <IconArrowUp size={16} />
                 </IconButton>
-                <IconButton label={`Вариант ${i + 1} ниже`} disabled={i === options.length - 1} onClick={() => move(i, 1)}>
+                <IconButton
+                  id={`${elId}-down`}
+                  label={`Вариант ${i + 1} ниже`}
+                  aria-disabled={i === options.length - 1 || undefined}
+                  onClick={() => move(i, 1)}
+                >
                   <IconArrowDown size={16} />
                 </IconButton>
-                <IconButton label={`Удалить вариант ${i + 1}`} tone="danger" disabled={options.length <= 1} onClick={() => remove(i)}>
+                <IconButton label={`Удалить вариант ${i + 1}`} aria-disabled={options.length <= 1 || undefined} onClick={() => remove(i)}>
                   <IconX size={16} />
                 </IconButton>
               </div>
               {err ? (
-                <p id={`${elId}-error`} className="ml-7 mt-1 text-sm text-red-700">
+                <p id={`${elId}-error`} className="mt-1 px-3 text-sm font-medium text-accent-800 sm:ml-[30px]">
                   {err}
                 </p>
               ) : null}
@@ -382,14 +417,14 @@ function OptionsEditor({
         id={fieldElId(field.id, 'options')}
         size="sm"
         variant="ghost"
-        className="ml-6 mt-2 text-accent hover:text-accent-strong"
-        disabled={options.length >= LIMITS.options}
+        className="mt-2 px-3 sm:ml-6"
+        aria-disabled={options.length >= LIMITS.options || undefined}
         onClick={() => addAfter(options.length - 1)}
         icon={<IconPlus size={16} />}
       >
         Добавить вариант
       </Button>
-      <p className="ml-7 mt-1 text-xs text-slate-500">Подсказка: Enter в поле варианта добавляет следующий.</p>
+      <p className="mt-1 px-3 text-xs text-neutral-700 sm:ml-6">Подсказка: Enter в поле варианта добавляет следующий.</p>
     </div>
   );
 }

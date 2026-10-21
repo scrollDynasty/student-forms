@@ -24,19 +24,19 @@ export function PreviewTab({ draft }: { draft: Draft }) {
 
   return (
     <div>
-      <div className="mb-4 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-        <p className="text-sm text-slate-600">Так форму увидит студент. Показана текущая версия, включая несохранённые изменения.</p>
-        <div role="group" aria-label="Ширина предпросмотра" className="inline-flex self-start rounded-lg bg-slate-100 p-1">
-          {options.map((o) => (
+      <div className="mb-5 flex flex-wrap items-center justify-between gap-3 px-1.5">
+        <p className="m-0 text-[15px] text-neutral-700">Так форму увидит студент — с учётом несохранённых изменений.</p>
+        <div role="group" aria-label="Ширина предпросмотра" className="inline-flex overflow-hidden rounded-full border border-neutral-500">
+          {options.map((o, i) => (
             <button
               key={o.value}
               type="button"
               aria-pressed={device === o.value}
               onClick={() => setDevice(o.value)}
               className={
-                'inline-flex min-h-9 items-center gap-1.5 rounded-md px-3 text-sm font-medium transition-colors ' +
-                'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent ' +
-                (device === o.value ? 'bg-white text-slate-900 shadow-sm' : 'text-slate-600 hover:text-slate-900')
+                'inline-flex min-h-10 cursor-pointer items-center gap-1.5 px-3.5 text-[13px] font-semibold transition-colors focus-visible:-outline-offset-2 ' +
+                (i > 0 ? 'border-l border-neutral-500 ' : '') +
+                (device === o.value ? 'bg-accent-700 text-neutral-100' : 'text-ink hover:bg-ink/7')
               }
             >
               {o.icon}
@@ -46,24 +46,23 @@ export function PreviewTab({ draft }: { draft: Draft }) {
         </div>
       </div>
 
-      <div className="rounded-2xl border border-slate-200 bg-gradient-to-b from-indigo-50/80 to-background p-3 sm:p-8">
-        <div className={`mx-auto transition-[max-width] ${device === 'mobile' ? 'max-w-[375px]' : 'max-w-2xl'}`}>
-          {doneAt ? (
-            <SubmitSuccess
-              title={draft.title || 'Без названия'}
-              submittedAt={doneAt}
-              note="Это предпросмотр — ответ не сохранён."
-              againLabel="Заполнить заново"
-              headingLevel="h2"
-              onAgain={() => {
-                setDoneAt(null);
-                setRound((r) => r + 1);
-              }}
-            />
-          ) : (
-            <FormRenderer key={round} form={draft} mode="preview" onSubmit={submit} />
-          )}
-        </div>
+      <div className={`mx-auto transition-[max-width] ${device === 'mobile' ? 'max-w-[375px]' : 'max-w-[680px]'}`}>
+        {doneAt ? (
+          <SubmitSuccess
+            title={draft.title || 'Без названия'}
+            submittedAt={doneAt}
+            message="Так студент увидит подтверждение после отправки."
+            note="Это предпросмотр — ответ не сохранён."
+            againLabel="Заполнить заново"
+            headingLevel="h2"
+            onAgain={() => {
+              setDoneAt(null);
+              setRound((r) => r + 1);
+            }}
+          />
+        ) : (
+          <FormRenderer key={round} form={draft} mode="preview" onSubmit={submit} />
+        )}
       </div>
     </div>
   );

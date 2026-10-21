@@ -3,23 +3,32 @@ import type { FormStatus } from '@/lib/api-client';
 import { Button } from './Button';
 import { IconAlert, IconInfo, IconRefresh } from './icons';
 
+/** Organic tag: «Опубликована» on sage, «Черновик» on sand. */
 export function StatusBadge({ status }: { status: FormStatus }) {
   const published = status === 'published';
   return (
     <span
       className={
-        'inline-flex shrink-0 items-center gap-1.5 rounded-full px-2.5 py-0.5 text-xs font-medium ring-1 ring-inset ' +
-        (published ? 'bg-emerald-50 text-emerald-800 ring-emerald-600/20' : 'bg-slate-100 text-slate-700 ring-slate-500/20')
+        'inline-flex shrink-0 items-center rounded-xl px-2.5 py-[3px] text-xs font-medium tracking-[0.02em] ' +
+        (published ? 'bg-accent-2-100 text-accent-2-800' : 'bg-neutral-200 text-neutral-800')
       }
     >
-      <span aria-hidden="true" className={`size-1.5 rounded-full ${published ? 'bg-emerald-600' : 'bg-slate-400'}`} />
       {published ? 'Опубликована' : 'Черновик'}
     </span>
   );
 }
 
 export function Skeleton({ className = '' }: { className?: string }) {
-  return <div aria-hidden="true" className={`animate-pulse rounded-lg bg-slate-200/80 motion-reduce:animate-none ${className}`} />;
+  return <div aria-hidden="true" className={`animate-pulse rounded-full bg-neutral-200 motion-reduce:animate-none ${className}`} />;
+}
+
+/** Screen-reader announcement for a loading placeholder. */
+export function LoadingStatus({ label = 'Загрузка…' }: { label?: string }) {
+  return (
+    <p role="status" className="sr-only">
+      {label}
+    </p>
+  );
 }
 
 export function Spinner({ className = 'size-4' }: { className?: string }) {
@@ -33,10 +42,10 @@ export function Spinner({ className = 'size-4' }: { className?: string }) {
 
 type Tone = 'info' | 'warning' | 'error' | 'success';
 const toneCls: Record<Tone, string> = {
-  info: 'border-indigo-200 bg-indigo-50 text-indigo-950',
-  warning: 'border-amber-300 bg-amber-50 text-amber-950',
-  error: 'border-red-200 bg-red-50 text-red-900',
-  success: 'border-emerald-200 bg-emerald-50 text-emerald-950',
+  info: 'bg-accent-2-100 text-accent-2-900',
+  warning: 'bg-accent-100 text-accent-900 ring-1 ring-inset ring-accent-300',
+  error: 'bg-accent-200 text-accent-900 ring-1 ring-inset ring-accent-400',
+  success: 'bg-accent-2-200 text-accent-2-900',
 };
 
 export function Alert({
@@ -56,7 +65,7 @@ export function Alert({
 }) {
   const Icon = tone === 'error' || tone === 'warning' ? IconAlert : IconInfo;
   return (
-    <div role={role} className={`flex gap-3 rounded-xl border px-4 py-3 text-sm leading-relaxed ${toneCls[tone]} ${className}`}>
+    <div role={role} className={`flex gap-3 rounded-[24px] px-5 py-4 text-sm leading-relaxed ${toneCls[tone]} ${className}`}>
       <Icon className="mt-0.5 shrink-0" />
       <div className="min-w-0 flex-1">
         {title ? <p className="font-semibold">{title}</p> : null}
@@ -72,19 +81,22 @@ export function EmptyState({
   title,
   children,
   action,
+  headingLevel = 'h2',
 }: {
   icon?: ReactNode;
   title: string;
   children?: ReactNode;
   action?: ReactNode;
+  headingLevel?: 'h2' | 'h3';
 }) {
+  const Heading = headingLevel;
   return (
-    <div className="flex flex-col items-center rounded-xl border border-dashed border-slate-300 bg-white px-6 py-12 text-center">
+    <div className="rounded-[32px] bg-neutral-100 px-6 py-10 sm:px-9 sm:py-12">
       {icon ? (
-        <div className="mb-4 flex size-12 items-center justify-center rounded-full bg-accent-soft text-accent">{icon}</div>
+        <div className="mb-5 flex size-14 items-center justify-center rounded-full bg-accent-2-200 text-accent-2-800">{icon}</div>
       ) : null}
-      <h2 className="text-base font-semibold text-slate-900">{title}</h2>
-      {children ? <div className="mt-2 max-w-md text-sm leading-relaxed text-slate-600">{children}</div> : null}
+      <Heading className="text-2xl">{title}</Heading>
+      {children ? <div className="mt-2 max-w-xl text-[15px] leading-relaxed text-neutral-700">{children}</div> : null}
       {action ? <div className="mt-6">{action}</div> : null}
     </div>
   );
@@ -92,12 +104,12 @@ export function EmptyState({
 
 export function ErrorState({ title = 'Не удалось загрузить данные', message, onRetry }: { title?: string; message?: string; onRetry?: () => void }) {
   return (
-    <div role="alert" className="flex flex-col items-center rounded-xl border border-red-200 bg-white px-6 py-10 text-center">
-      <div className="mb-4 flex size-12 items-center justify-center rounded-full bg-red-50 text-red-600">
-        <IconAlert size={22} />
+    <div role="alert" className="rounded-[32px] bg-neutral-100 px-6 py-10 sm:px-9">
+      <div className="mb-5 flex size-14 items-center justify-center rounded-full bg-accent-200 text-accent-800">
+        <IconAlert size={24} />
       </div>
-      <h2 className="text-base font-semibold text-slate-900">{title}</h2>
-      {message ? <p className="mt-2 max-w-md text-sm text-slate-600">{message}</p> : null}
+      <h2 className="text-2xl">{title}</h2>
+      {message ? <p className="mt-2 max-w-xl text-[15px] text-neutral-700">{message}</p> : null}
       {onRetry ? (
         <Button className="mt-6" onClick={onRetry} icon={<IconRefresh size={16} />}>
           Повторить

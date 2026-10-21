@@ -2,8 +2,9 @@
 
 import { useRef, useState, type FormEvent, type ReactNode } from 'react';
 import { LIMITS, isChoiceType, validateAnswers, type Answers, type ErrorMap, type Field } from '@/lib/schema';
+import { buttonClasses } from '@/components/ui/Button';
 import { Spinner } from '@/components/ui/feedback';
-import { IconAlert, IconInfo } from '@/components/ui/icons';
+import { IconAlert } from '@/components/ui/icons';
 
 /** What the user has typed so far; number fields stay strings until validateAnswers converts them. */
 export type DraftValue = string | boolean | string[];
@@ -37,6 +38,30 @@ function pruneAnswers(answers: DraftAnswers, prevFields: Field[], fields: Field[
   return out;
 }
 
+/** Turns untrusted stored data (a restored draft) into answers that fit the current fields. */
+export function sanitizeAnswers(raw: unknown, fields: Field[]): DraftAnswers {
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return {};
+  const src = raw as Record<string, unknown>;
+  const out: DraftAnswers = {};
+  for (const f of fields) {
+    if (!Object.prototype.hasOwnProperty.call(src, f.id)) continue;
+    const v = src[f.id];
+    if (f.type === 'checkbox') {
+      if (typeof v === 'boolean') out[f.id] = v;
+    } else if (f.type === 'multi_select') {
+      if (Array.isArray(v)) {
+        const ids = new Set(f.options.map((o) => o.id));
+        out[f.id] = v.filter((x): x is string => typeof x === 'string' && ids.has(x));
+      }
+    } else if (f.type === 'select' || f.type === 'radio') {
+      if (typeof v === 'string' && f.options.some((o) => o.id === v)) out[f.id] = v;
+    } else if (typeof v === 'string') {
+      out[f.id] = v.slice(0, LIMITS.long_text);
+    }
+  }
+  return out;
+}
+
 const hasErrors = (e: ErrorMap) => Object.keys(e).length > 0;
 
 function focusControl(fieldId: string) {
@@ -52,6 +77,8 @@ export function FormRenderer({
   mode,
   onSubmit,
   onFieldChange,
+  initialAnswers,
+  onAnswersChange,
   notice,
 }: {
   form: RenderableForm;
@@ -59,10 +86,14 @@ export function FormRenderer({
   onSubmit: (values: Answers) => Promise<SubmitOutcome>;
   /** Called after every user change of a field value (used for analytics in public mode). */
   onFieldChange?: (fieldId: string) => void;
+  /** Answers to start from (e.g. a draft restored after a reload). */
+  initialAnswers?: DraftAnswers;
+  /** Receives every new set of answers (e.g. to keep a draft). */
+  onAnswersChange?: (answers: DraftAnswers) => void;
   notice?: ReactNode;
 }) {
   const { fields } = form;
-  const [answers, setAnswers] = useState<DraftAnswers>({});
+  const [answers, setAnswers] = useState<DraftAnswers>(() => initialAnswers ?? {});
   const [errors, setErrors] = useState<ErrorMap>({});
   const [attempted, setAttempted] = useState(false);
   const [submitting, setSubmitting] = useState(false);
@@ -90,6 +121,7 @@ export function FormRenderer({
     setAnswers(next);
     if (attempted) revalidate(next);
     onFieldChange?.(field.id);
+    onAnswersChange?.(next);
   }
 
   function blur() {
@@ -129,101 +161,100 @@ export function FormRenderer({
 
   const Heading = mode === 'preview' ? 'h2' : 'h1';
   const errorCount = errorOrder.length + otherErrors.length;
+  const showSummary = attempted && errorCount > 0;
 
   return (
-    <div className="@container overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm">
-      <div className="h-1.5 bg-gradient-to-r from-indigo-500 via-violet-500 to-indigo-400" aria-hidden="true" />
-      <div className="px-5 py-6 @lg:px-8 @lg:py-8">
-        {mode === 'preview' ? (
-          <p className="mb-5 flex items-center gap-2 rounded-lg bg-amber-50 px-3 py-2 text-sm font-medium text-amber-900 ring-1 ring-amber-200">
-            <IconInfo size={16} className="shrink-0" />
-            Предпросмотр: ответы не сохраняются
-          </p>
-        ) : null}
+    <div className="@container">
+      {mode === 'preview' ? (
+        <p className="mb-4 flex items-center gap-2.5 rounded-full bg-accent-100 px-[18px] py-2.5 text-sm font-semibold text-accent-800">
+          <span aria-hidden="true" className="size-2 shrink-0 rounded-full bg-accent" />
+          Предпросмотр: ответы не сохраняются
+        </p>
+      ) : null}
 
-        <Heading className="text-2xl font-semibold leading-tight tracking-tight text-slate-900 @lg:text-[1.75rem]">
-          {form.title || 'Без названия'}
-        </Heading>
+      <div className="rounded-[36px] bg-neutral-100 px-5 pb-7 pt-8 shadow-sm @lg:px-9 @lg:pb-9 @lg:pt-10">
+        <Heading className="m-0 text-[30px] text-pretty break-words @lg:text-[36px]">{form.title || 'Без названия'}</Heading>
         {form.description ? (
-          <p className="mt-3 whitespace-pre-wrap break-words text-base leading-relaxed text-slate-600">{form.description}</p>
+          <p className="mb-0 mt-3.5 whitespace-pre-wrap break-words text-base leading-[1.6] text-neutral-800">{form.description}</p>
         ) : null}
         {fields.some((f) => f.required) ? (
-          <p className="mt-4 text-sm text-slate-500">
-            <span aria-hidden="true" className="text-red-600">
+          <p className="mb-0 mt-4 text-[13px] text-neutral-700">
+            <span aria-hidden="true" className="text-accent-700">
               *
             </span>{' '}
             — обязательные вопросы
           </p>
         ) : null}
 
-        {notice ? <div className="mt-5">{notice}</div> : null}
+        {notice ? <div className="mt-6">{notice}</div> : null}
 
-        <form noValidate onSubmit={submit} className="mt-6" aria-label={form.title || 'Форма'}>
-          <div aria-live="polite">
-            {attempted && errorCount > 0 ? (
-              <div className="mb-6 rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-900">
-                <p className="flex items-center gap-2 font-semibold">
+        <form noValidate onSubmit={submit} className="mt-9 grid gap-[30px]" aria-label={form.title || 'Форма'}>
+          {/* Only the count is a live region, so fixing answers doesn't re-read the whole list on every keystroke. */}
+          <div className={showSummary ? 'rounded-[24px] bg-accent-100 px-5 py-4 text-sm text-accent-900 ring-1 ring-inset ring-accent-300' : 'contents'}>
+            <p aria-live="polite" className={showSummary ? 'flex items-center gap-2 font-semibold' : 'sr-only'}>
+              {showSummary ? (
+                <>
                   <IconAlert size={16} />
                   Проверьте ответы: {errorCount === 1 ? 'есть 1 ошибка' : `ошибок — ${errorCount}`}
-                </p>
-                <ul className="mt-2 list-disc space-y-1 pl-6">
-                  {errorOrder.map((f) => (
-                    <li key={f.id}>
-                      <a
-                        href={`#${controlId(f.id)}`}
-                        onClick={(e) => {
-                          e.preventDefault();
-                          focusControl(f.id);
-                        }}
-                        className="underline underline-offset-2 hover:text-red-700"
-                      >
-                        {f.label || 'Вопрос'}
-                      </a>
-                      : {errors[f.id]}
-                    </li>
-                  ))}
-                  {otherErrors.map(([k, msg]) => (
-                    <li key={k}>{msg}</li>
-                  ))}
-                </ul>
-              </div>
+                </>
+              ) : null}
+            </p>
+            {showSummary ? (
+              <ul className="mb-0 mt-2 list-disc space-y-1 pl-6">
+                {errorOrder.map((f) => (
+                  <li key={f.id}>
+                    <a
+                      href={`#${controlId(f.id)}`}
+                      onClick={(e) => {
+                        e.preventDefault();
+                        focusControl(f.id);
+                      }}
+                      className="text-accent-900 underline hover:text-accent-800"
+                    >
+                      {f.label || 'Вопрос'}
+                    </a>
+                    : {errors[f.id]}
+                  </li>
+                ))}
+                {otherErrors.map(([k, msg]) => (
+                  <li key={k}>{msg}</li>
+                ))}
+              </ul>
             ) : null}
           </div>
 
           {fields.length === 0 ? (
-            <p className="rounded-xl border border-dashed border-slate-300 px-4 py-8 text-center text-slate-500">
+            <p className="rounded-[26px] border border-dashed border-neutral-500 px-5 py-8 text-center text-neutral-700">
               В форме пока нет вопросов.
             </p>
           ) : (
-            <div className="space-y-7">
-              {fields.map((field) => (
-                <FieldControl
-                  key={field.id}
-                  field={field}
-                  value={answers[field.id]}
-                  error={errors[field.id]}
-                  onChange={(v) => change(field, v)}
-                  onBlur={blur}
-                />
-              ))}
-            </div>
+            fields.map((field) => (
+              <FieldControl
+                key={field.id}
+                field={field}
+                value={answers[field.id]}
+                error={errors[field.id]}
+                onChange={(v) => change(field, v)}
+                onBlur={blur}
+              />
+            ))
           )}
 
           {submitError ? (
-            <div role="alert" className="mt-6 rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm leading-relaxed text-red-900">
+            <div role="alert" className="rounded-[24px] bg-accent-200 px-5 py-4 text-sm leading-relaxed text-accent-900 ring-1 ring-inset ring-accent-400">
               {submitError}
             </div>
           ) : null}
 
-          <div className="mt-8">
+          <div>
             <button
               type="submit"
-              disabled={submitting || fields.length === 0}
-              className={
-                'inline-flex min-h-12 w-full items-center justify-center gap-2 rounded-xl bg-accent px-6 text-base font-semibold text-white shadow-sm ' +
-                'transition-colors hover:bg-accent-strong focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent focus-visible:ring-offset-2 ' +
-                'disabled:cursor-not-allowed disabled:opacity-60 @lg:w-auto'
-              }
+              aria-disabled={submitting || fields.length === 0 || undefined}
+              onClick={(e) => {
+                // Inert while sending (but still focusable, so focus isn't lost).
+                if (submitting || fields.length === 0) e.preventDefault();
+              }}
+              className={buttonClasses('primary', 'lg', 'w-full @lg:w-auto')}
             >
               {submitting ? (
                 <>
@@ -233,6 +264,9 @@ export function FormRenderer({
                 'Отправить'
               )}
             </button>
+            <p role="status" className="sr-only">
+              {submitting ? 'Отправка…' : ''}
+            </p>
           </div>
         </form>
       </div>
@@ -240,24 +274,32 @@ export function FormRenderer({
   );
 }
 
-const controlCls = (invalid: boolean) =>
-  'block w-full min-h-12 rounded-xl border bg-white px-4 py-3 text-base leading-normal text-slate-900 placeholder:text-slate-500 ' +
-  'transition-colors focus:outline-none focus-visible:ring-4 ' +
-  (invalid
-    ? 'border-red-500 focus-visible:ring-red-500/20'
-    : 'border-slate-300 hover:border-slate-400 focus-visible:border-accent focus-visible:ring-accent/20');
+function controlCls(invalid: boolean, extra = '', shape = 'rounded-full') {
+  return (
+    `mt-2.5 block w-full min-h-[50px] ${shape} border px-5 py-3 text-base leading-normal text-ink caret-accent ` +
+    'placeholder:text-neutral-700 transition-colors focus-visible:border-accent ' +
+    (invalid ? 'border-accent-700 bg-accent-100 ' : 'border-neutral-600 bg-bg hover:border-ink ') +
+    extra
+  );
+}
 
 function RequiredMark({ required }: { required: boolean }) {
   if (!required) return null;
   return (
     <>
-      <span aria-hidden="true" className="ml-0.5 text-red-600">
+      <span aria-hidden="true" className="ml-[3px] text-accent-700">
         *
       </span>
       <span className="sr-only"> (обязательное)</span>
     </>
   );
 }
+
+// Option cards: the card shows the focus ring for the native control inside it.
+const optionCardBase =
+  'flex cursor-pointer items-center gap-3 border bg-bg px-5 text-base transition-colors ' +
+  'has-[:focus-visible]:outline-2 has-[:focus-visible]:outline-offset-2 has-[:focus-visible]:outline-accent has-[:focus-visible]:outline-solid ';
+const nativeChoice = 'size-5 shrink-0 cursor-pointer accent-accent-700 focus-visible:outline-none';
 
 function FieldControl({
   field,
@@ -281,12 +323,12 @@ function FieldControl({
   const str = typeof value === 'string' ? value : '';
 
   const hint = field.hint ? (
-    <p id={hintId} className="mt-1 whitespace-pre-wrap text-sm leading-relaxed text-slate-500">
+    <p id={hintId} className="mb-0 mt-1 whitespace-pre-wrap text-sm leading-relaxed text-neutral-700">
       {field.hint}
     </p>
   ) : null;
   const errorEl = error ? (
-    <p id={errorId} className="mt-2 flex items-start gap-1.5 text-sm font-medium text-red-700">
+    <p id={errorId} className="mb-0 mt-2 flex items-start gap-1.5 px-1 text-sm font-semibold text-accent-800">
       <IconAlert size={16} className="mt-0.5 shrink-0" />
       {error}
     </p>
@@ -304,23 +346,23 @@ function FieldControl({
     const multi = field.type === 'multi_select';
     const selected = Array.isArray(value) ? value : [];
     return (
-      <fieldset aria-describedby={describedBy}>
-        <legend className="text-base font-medium leading-snug text-slate-900">
+      <fieldset aria-describedby={describedBy} className="m-0 min-w-0 border-0 p-0">
+        <legend className="p-0 text-base font-semibold leading-[1.35]">
           {label}
           <RequiredMark required={field.required} />
         </legend>
         {hint}
         {multi ? <p className="sr-only">Можно выбрать несколько вариантов</p> : null}
-        <div className="mt-3 space-y-2">
+        <div className="mt-3 grid gap-2">
           {field.options.map((opt, i) => {
             const checked = multi ? selected.includes(opt.id) : value === opt.id;
             return (
               <label
                 key={opt.id}
                 className={
-                  'flex min-h-12 cursor-pointer items-center gap-3 rounded-xl border px-4 py-2.5 text-base leading-snug transition-colors ' +
-                  'has-[:focus-visible]:ring-4 has-[:focus-visible]:ring-accent/20 ' +
-                  (checked ? 'border-accent bg-accent-soft/60' : invalid ? 'border-red-300 hover:bg-slate-50' : 'border-slate-200 hover:bg-slate-50')
+                  optionCardBase +
+                  'min-h-[50px] rounded-full py-2.5 leading-snug ' +
+                  (checked ? 'border-accent bg-accent-100' : invalid ? 'border-accent-700 hover:border-accent' : 'border-neutral-500 hover:border-accent')
                 }
               >
                 <input
@@ -341,9 +383,9 @@ function FieldControl({
                       onChange(opt.id);
                     }
                   }}
-                  className="size-5 shrink-0 accent-indigo-600 focus:outline-none"
+                  className={nativeChoice}
                 />
-                <span className="min-w-0 break-words text-slate-800">{opt.label}</span>
+                <span className="min-w-0 break-words">{opt.label}</span>
               </label>
             );
           })}
@@ -358,9 +400,9 @@ function FieldControl({
       <div>
         <label
           className={
-            'flex min-h-12 cursor-pointer items-start gap-3 rounded-xl border px-4 py-3 text-base leading-snug transition-colors ' +
-            'has-[:focus-visible]:ring-4 has-[:focus-visible]:ring-accent/20 ' +
-            (invalid ? 'border-red-400' : value === true ? 'border-accent bg-accent-soft/60' : 'border-slate-200 hover:bg-slate-50')
+            optionCardBase +
+            'items-start rounded-[26px] py-4 font-semibold leading-[1.4] ' +
+            (invalid ? 'border-accent-700' : value === true ? 'border-accent bg-accent-100' : 'border-neutral-500 hover:border-accent')
           }
         >
           <input
@@ -368,9 +410,9 @@ function FieldControl({
             type="checkbox"
             checked={value === true}
             onChange={(e) => onChange(e.target.checked)}
-            className="mt-0.5 size-5 shrink-0 accent-indigo-600 focus:outline-none"
+            className={`${nativeChoice} mt-px`}
           />
-          <span className="min-w-0 break-words font-medium text-slate-900">
+          <span className="min-w-0 break-words">
             {label}
             <RequiredMark required={field.required} />
           </span>
@@ -392,7 +434,7 @@ function FieldControl({
           placeholder={field.placeholder || undefined}
           value={str}
           onChange={(e) => onChange(e.target.value)}
-          className={`${controlCls(invalid)} resize-y leading-relaxed`}
+          className={controlCls(invalid, 'resize-y py-3.5 leading-[1.55]', 'rounded-[26px]')}
         />
       );
       break;
@@ -457,7 +499,7 @@ function FieldControl({
       break;
     case 'select':
       control = (
-        <select {...common} value={str} onChange={(e) => onChange(e.target.value)} className={`${controlCls(invalid)} pr-10`}>
+        <select {...common} value={str} onChange={(e) => onChange(e.target.value)} className={controlCls(invalid, 'cursor-pointer pr-10')}>
           <option value="">Выберите…</option>
           {field.options.map((opt) => (
             <option key={opt.id} value={opt.id}>
@@ -483,7 +525,7 @@ function FieldControl({
 
   const rangeHint =
     field.type === 'number' && (field.min !== null || field.max !== null) ? (
-      <p className="mt-1 text-sm text-slate-500">
+      <p className="mb-0 mt-1 text-sm text-neutral-700">
         {field.min !== null && field.max !== null
           ? `От ${field.min} до ${field.max}`
           : field.min !== null
@@ -494,13 +536,13 @@ function FieldControl({
 
   return (
     <div>
-      <label htmlFor={id} className="block text-base font-medium leading-snug text-slate-900">
+      <label htmlFor={id} className="block text-base font-semibold leading-[1.35]">
         {label}
         <RequiredMark required={field.required} />
       </label>
       {hint}
       {rangeHint}
-      <div className="mt-2.5">{control}</div>
+      {control}
       {errorEl}
     </div>
   );

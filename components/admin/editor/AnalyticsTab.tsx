@@ -1,10 +1,10 @@
 'use client';
 
 import { useEffect, useState } from 'react';
-import { api, type Analytics } from '@/lib/api-client';
+import { api, errorMessage, type Analytics } from '@/lib/api-client';
 import { formatPercent, shareOf } from '@/lib/format';
 import { Button } from '@/components/ui/Button';
-import { EmptyState, ErrorState, Skeleton, Spinner } from '@/components/ui/feedback';
+import { EmptyState, ErrorState, LoadingStatus, Skeleton, Spinner } from '@/components/ui/feedback';
 import { IconChart, IconRefresh } from '@/components/ui/icons';
 
 type State = { status: 'loading' } | { status: 'error'; message: string } | { status: 'ready'; data: Analytics; refreshing: boolean };
@@ -20,7 +20,7 @@ export function AnalyticsTab({ formId, published }: { formId: string; published:
         if (!cancelled) setState({ status: 'ready', data, refreshing: false });
       },
       (e: unknown) => {
-        if (!cancelled) setState({ status: 'error', message: e instanceof Error ? e.message : 'Неизвестная ошибка' });
+        if (!cancelled) setState({ status: 'error', message: errorMessage(e) });
       },
     );
     return () => {
@@ -35,13 +35,14 @@ export function AnalyticsTab({ formId, published }: { formId: string; published:
 
   if (state.status === 'loading') {
     return (
-      <div aria-busy="true" aria-label="Загрузка аналитики" className="space-y-4">
-        <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
+      <div aria-busy="true" className="grid gap-5">
+        <LoadingStatus label="Загружаем аналитику…" />
+        <div className="grid grid-cols-1 gap-3 min-[420px]:grid-cols-2 lg:grid-cols-4">
           {[0, 1, 2, 3].map((i) => (
-            <Skeleton key={i} className="h-24" />
+            <div key={i} className="h-[132px] animate-pulse rounded-[32px] bg-neutral-200 motion-reduce:animate-none" />
           ))}
         </div>
-        <Skeleton className="h-40" />
+        <Skeleton className="h-40 rounded-[32px]" />
       </div>
     );
   }
@@ -51,18 +52,29 @@ export function AnalyticsTab({ formId, published }: { formId: string; published:
 
   const { data, refreshing } = state;
   const maxDrop = Math.max(0, ...data.fields.map((f) => f.lastBeforeAbandon));
+  const tiles = [
+    { label: 'Просмотры', value: String(data.views), sub: 'сеансов открыли форму', accent: false },
+    { label: 'Начали заполнение', value: String(data.starts), sub: `${formatPercent(data.startRate)} от просмотров`, accent: false },
+    { label: 'Отправили', value: String(data.submissions), sub: 'сохранённых ответов', accent: false },
+    { label: 'Конверсия', value: formatPercent(data.completionRate), sub: 'отправили из начавших', accent: true },
+  ];
+  const funnel = [
+    { label: 'Просмотры', value: data.views, color: 'bg-accent-2-400' },
+    { label: 'Начали заполнение', value: data.starts, color: 'bg-accent-2-500' },
+    { label: 'Отправили', value: data.submissions, color: 'bg-accent-2-700' },
+  ];
 
   return (
-    <div className="space-y-6">
-      <div className="flex items-center justify-between gap-3">
-        <p className="text-sm text-slate-600">Как студенты проходят форму — от открытия ссылки до отправки.</p>
-        <Button size="sm" onClick={refresh} disabled={refreshing} icon={refreshing ? <Spinner /> : <IconRefresh size={16} />}>
+    <div className="grid gap-5">
+      <div className="flex flex-wrap items-center justify-between gap-3 px-1.5">
+        <p className="m-0 text-[15px] text-neutral-700">Как студенты проходят форму — от открытия ссылки до отправки.</p>
+        <Button size="sm" onClick={refresh} aria-disabled={refreshing || undefined} icon={refreshing ? <Spinner /> : <IconRefresh size={16} />}>
           Обновить
         </Button>
       </div>
 
       {data.views === 0 ? (
-        <EmptyState icon={<IconChart size={22} />} title="Пока нет данных">
+        <EmptyState icon={<IconChart size={24} />} title="Пока нет данных">
           {published
             ? 'Как только студенты откроют ссылку на форму, здесь появятся просмотры, начатые заполнения и места, где студенты бросают форму.'
             : 'Опубликуйте форму и поделитесь ссылкой — здесь появится воронка: просмотры, начатые заполнения, отправки.'}
@@ -70,97 +82,105 @@ export function AnalyticsTab({ formId, published }: { formId: string; published:
         </EmptyState>
       ) : (
         <>
-          <dl className="grid grid-cols-2 gap-3 lg:grid-cols-4">
-            <Tile label="Просмотры" value={String(data.views)} sub="сеансов открыли форму" />
-            <Tile label="Начали заполнение" value={String(data.starts)} sub={`${formatPercent(data.startRate)} от просмотров`} />
-            <Tile label="Отправили" value={String(data.submissions)} sub="сохранённых ответов" />
-            <Tile label="Конверсия" value={formatPercent(data.completionRate)} sub="отправили из начавших" accent />
+          <dl className="m-0 grid grid-cols-1 gap-3 min-[420px]:grid-cols-2 lg:grid-cols-4">
+            {tiles.map((t) => (
+              <div
+                key={t.label}
+                className={`rounded-[32px] px-6 py-[22px] ${t.accent ? 'bg-accent-2-700 text-accent-2-100' : 'bg-neutral-100 text-ink'}`}
+              >
+                <dt className="text-sm font-semibold">{t.label}</dt>
+                <dd className="m-0 mt-2.5 font-heading text-[40px] font-semibold leading-[1.1] tracking-[-0.025em] tabular-nums sm:text-[44px]">
+                  {t.value}
+                </dd>
+                <dd className="m-0 mt-1 text-[13px] opacity-85">{t.sub}</dd>
+              </div>
+            ))}
           </dl>
 
-          <section aria-labelledby="funnel-heading" className="rounded-xl border border-slate-200 bg-white p-4 shadow-xs sm:p-5">
-            <h2 id="funnel-heading" className="text-base font-semibold text-slate-900">
+          <section aria-labelledby="funnel-heading" className="rounded-[32px] bg-neutral-100 px-5 py-6 sm:px-7 sm:py-[26px]">
+            <h2 id="funnel-heading" className="mb-5 text-[25px]">
               Воронка
             </h2>
-            <div className="mt-4 space-y-3">
-              <FunnelBar label="Просмотры" value={data.views} base={data.views} />
-              <FunnelBar label="Начали заполнение" value={data.starts} base={data.views} />
-              <FunnelBar label="Отправили" value={data.submissions} base={data.views} />
+            <div className="grid gap-3.5">
+              {funnel.map((b) => {
+                const pct = data.views > 0 ? Math.min(100, (b.value / data.views) * 100) : 0;
+                return (
+                  <div key={b.label} className="grid grid-cols-[minmax(96px,180px)_minmax(0,1fr)_56px] items-center gap-3 sm:gap-4">
+                    <span className="text-sm font-semibold">{b.label}</span>
+                    <span className="h-5 overflow-hidden rounded-full bg-neutral-200" aria-hidden="true">
+                      <span className={`block h-full rounded-full ${b.color}`} style={{ width: `${Math.max(pct, b.value > 0 ? 3 : 0)}%` }} />
+                    </span>
+                    <span className="text-right font-heading text-lg font-semibold tabular-nums">
+                      {b.value}
+                      <span className="sr-only"> ({shareOf(b.value, data.views)} от просмотров)</span>
+                    </span>
+                  </div>
+                );
+              })}
             </div>
-            <p className="mt-4 text-sm text-slate-600">
-              Начали, но не отправили: <span className="font-semibold text-slate-900">{data.abandoned}</span>
+            <p className="mb-0 mt-5 text-sm text-neutral-700">
+              Начали, но пока не отправили: <b className="text-ink">{data.abandoned}</b>
             </p>
           </section>
 
-          <section aria-labelledby="an-fields-heading" className="rounded-xl border border-slate-200 bg-white shadow-xs">
-            <div className="px-4 pt-4 sm:px-5 sm:pt-5">
-              <h2 id="an-fields-heading" className="text-base font-semibold text-slate-900">
-                Вопросы
-              </h2>
-              <p className="mt-1 text-sm text-slate-600">
-                Где студенты останавливаются. {maxDrop > 0 ? 'Вопрос, после которого уходят чаще всего, выделен.' : ''}
-              </p>
-            </div>
+          <section aria-labelledby="stops-heading" className="rounded-[32px] bg-neutral-100 px-5 py-6 sm:px-7 sm:py-[26px]">
+            <h2 id="stops-heading" className="mb-1 text-[25px]">
+              Где студенты останавливаются
+            </h2>
+            <p className="mb-[18px] text-sm text-neutral-700">
+              Заполнили — доля от начавших. Бросили — вопрос был последним перед уходом; обычно проблема в следующем за ним.
+            </p>
             {data.fields.length === 0 ? (
-              <p className="px-5 py-6 text-sm text-slate-500">В форме нет вопросов.</p>
+              <p className="text-sm text-neutral-700">В форме нет вопросов.</p>
             ) : (
-              <div className="mt-3 overflow-x-auto">
-                <table className="w-full min-w-[560px] text-left text-sm">
-                  <thead className="border-y border-slate-200 bg-slate-50 text-xs font-semibold uppercase tracking-wide text-slate-500">
-                    <tr>
-                      <th scope="col" className="px-4 py-3 sm:px-5">
-                        Вопрос
-                      </th>
-                      <th scope="col" className="px-4 py-3">
-                        Заполнили
-                      </th>
-                      <th scope="col" className="px-4 py-3">
-                        Бросили на этом поле
-                      </th>
-                    </tr>
-                  </thead>
-                  <tbody className="divide-y divide-slate-100">
-                    {data.fields.map((f) => {
-                      const worst = maxDrop > 0 && f.lastBeforeAbandon === maxDrop;
-                      const pct = data.starts > 0 ? Math.min(100, (f.filled / data.starts) * 100) : 0;
-                      return (
-                        <tr key={f.fieldId} className={worst ? 'bg-amber-50' : ''}>
-                          <td className="px-4 py-3 text-slate-800 sm:px-5">
-                            <span className="line-clamp-2">{f.label}</span>
-                            {worst ? (
-                              <span className="mt-1 inline-block rounded-full bg-amber-200/70 px-2 py-0.5 text-xs font-medium text-amber-950">
-                                Чаще всего бросают здесь
-                              </span>
-                            ) : null}
-                          </td>
-                          <td className="px-4 py-3">
-                            <div className="flex items-center gap-3">
-                              <span className="w-24 shrink-0 tabular-nums text-slate-800">
-                                {f.filled} <span className="text-slate-500">({shareOf(f.filled, data.starts)})</span>
-                              </span>
-                              <span aria-hidden="true" className="hidden h-1.5 w-24 overflow-hidden rounded-full bg-slate-100 sm:block">
-                                <span className="block h-full rounded-full bg-accent" style={{ width: `${pct}%` }} />
-                              </span>
-                            </div>
-                          </td>
-                          <td className={`px-4 py-3 tabular-nums ${worst ? 'font-semibold text-amber-950' : 'text-slate-800'}`}>
-                            {f.lastBeforeAbandon}
-                          </td>
-                        </tr>
-                      );
-                    })}
-                  </tbody>
-                </table>
-              </div>
+              <ul className="m-0 grid list-none gap-1.5 p-0">
+                {data.fields.map((f) => {
+                  const worst = maxDrop > 0 && f.lastBeforeAbandon === maxDrop;
+                  const pct = data.starts > 0 ? Math.min(100, (f.filled / data.starts) * 100) : 0;
+                  return (
+                    <li
+                      key={f.fieldId}
+                      className={
+                        'grid grid-cols-1 items-center gap-x-[18px] gap-y-2 rounded-[22px] px-4 py-3 sm:grid-cols-[minmax(0,1fr)_minmax(120px,200px)_90px] ' +
+                        (worst ? 'bg-accent-100' : '')
+                      }
+                    >
+                      <div className="min-w-0">
+                        <div className="text-[15px] font-semibold">{f.label}</div>
+                        {worst ? (
+                          <span className="mt-1.5 inline-flex rounded-xl bg-accent-300 px-2.5 py-[3px] text-[11px] text-accent-900">
+                            Чаще всего бросают здесь
+                          </span>
+                        ) : null}
+                      </div>
+                      <div className="flex items-center gap-2.5">
+                        <span className="sr-only">Заполнили: {f.filled},</span>
+                        <span className="h-2 flex-1 overflow-hidden rounded-full bg-neutral-300" aria-hidden="true">
+                          <span className="block h-full bg-accent-2" style={{ width: `${pct}%` }} />
+                        </span>
+                        <span className="w-10 text-right text-[13px] tabular-nums">{shareOf(f.filled, data.starts)}</span>
+                      </div>
+                      <div className="text-sm sm:text-right">
+                        <span className="sr-only">Бросили на этом поле: </span>
+                        <span className="font-heading text-lg font-semibold tabular-nums">{f.lastBeforeAbandon}</span>{' '}
+                        <span className="text-neutral-700" aria-hidden="true">
+                          ушли
+                        </span>
+                      </div>
+                    </li>
+                  );
+                })}
+              </ul>
             )}
           </section>
         </>
       )}
 
-      <section aria-labelledby="method-heading" className="rounded-xl bg-slate-100/80 p-4 text-sm leading-relaxed text-slate-700 sm:p-5">
-        <h2 id="method-heading" className="font-semibold text-slate-900">
+      <section aria-labelledby="method-heading" className="rounded-[32px] bg-surface px-5 py-6 text-sm leading-relaxed sm:px-7">
+        <h2 id="method-heading" className="mb-2 text-xl">
           Как считаются показатели
         </h2>
-        <ul className="mt-2 list-disc space-y-1 pl-5">
+        <ul className="m-0 grid list-disc gap-1 pl-5">
           <li>
             <b>Просмотр</b> — форма загрузилась у студента. Один сеанс — одна вкладка браузера: перезагрузка страницы не считается новым
             просмотром.
@@ -175,41 +195,16 @@ export function AnalyticsTab({ formId, published }: { formId: string; published:
             <b>Конверсия</b> — доля начавших заполнение, которые отправили форму.
           </li>
           <li>
+            <b>Начали, но пока не отправили</b> — сеансы, где ответ ещё не отправлен; студент мог вернуться к форме позже.
+          </li>
+          <li>
             <b>Заполнили</b> — сколько сеансов изменили ответ на этот вопрос; процент — от начавших заполнение.
           </li>
           <li>
             <b>Бросили на этом поле</b> — сколько студентов начали, но не отправили форму, и этот вопрос был последним, который они изменили.
-            Обычно проблема в следующем за ним вопросе.
           </li>
         </ul>
       </section>
-    </div>
-  );
-}
-
-function Tile({ label, value, sub, accent = false }: { label: string; value: string; sub: string; accent?: boolean }) {
-  return (
-    <div className={`rounded-xl border p-4 shadow-xs ${accent ? 'border-accent/30 bg-accent-soft/60' : 'border-slate-200 bg-white'}`}>
-      <dt className="text-sm font-medium text-slate-600">{label}</dt>
-      <dd className={`mt-1 text-2xl font-semibold tabular-nums ${accent ? 'text-accent-strong' : 'text-slate-900'}`}>{value}</dd>
-      <dd className="mt-0.5 text-xs text-slate-500">{sub}</dd>
-    </div>
-  );
-}
-
-function FunnelBar({ label, value, base }: { label: string; value: number; base: number }) {
-  const pct = base > 0 ? Math.min(100, (value / base) * 100) : 0;
-  return (
-    <div>
-      <div className="mb-1 flex justify-between gap-3 text-sm">
-        <span className="text-slate-700">{label}</span>
-        <span className="tabular-nums text-slate-900">
-          <b>{value}</b> <span className="text-slate-500">· {shareOf(value, base)}</span>
-        </span>
-      </div>
-      <div className="h-3 overflow-hidden rounded-full bg-slate-100" aria-hidden="true">
-        <div className="h-full rounded-full bg-gradient-to-r from-indigo-500 to-violet-500" style={{ width: `${Math.max(pct, value > 0 ? 2 : 0)}%` }} />
-      </div>
     </div>
   );
 }

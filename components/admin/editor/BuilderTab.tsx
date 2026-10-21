@@ -1,14 +1,14 @@
 'use client';
 
-import type { Dispatch, SetStateAction } from 'react';
+import { useState, type Dispatch, type SetStateAction } from 'react';
 import { FIELD_TYPES, LIMITS, createField, generateId, type Field, type FieldType } from '@/lib/schema';
 import { Button } from '@/components/ui/Button';
 import { useToast } from '@/components/ui/Toast';
-import { Alert } from '@/components/ui/feedback';
+import { Alert, EmptyState } from '@/components/ui/feedback';
 import { FieldError, Label, TextArea, TextInput } from '@/components/ui/inputs';
 import { IconForm, IconPlus } from '@/components/ui/icons';
 import { FieldCard } from './FieldCard';
-import { PALETTE_ID, clearFieldErrors, fieldElId, omit, summaryElId, type EditorErrors } from './errors';
+import { PALETTE_ID, clearFieldErrors, fieldElId, moveElId, omit, summaryElId, type EditorErrors } from './errors';
 
 export interface Draft {
   title: string;
@@ -47,6 +47,7 @@ export function BuilderTab({
   const { fields } = draft;
   const full = fields.length >= LIMITS.fields;
   const toast = useToast();
+  const [announcement, setAnnouncement] = useState('');
 
   const setFields = (fn: (fields: Field[]) => Field[]) => setDraft((d) => ({ ...d, fields: fn(d.fields) }));
 
@@ -71,14 +72,30 @@ export function BuilderTab({
     setSelectedId(null);
   }
 
+  function select(id: string) {
+    setSelectedId(id);
+    requestFocus(fieldElId(id, 'label'));
+  }
+
+  function collapse(id: string) {
+    setSelectedId(null);
+    requestFocus(summaryElId(id));
+  }
+
   function move(index: number, dir: -1 | 1) {
+    const j = index + dir;
+    const field = fields[index];
+    if (!field || j < 0 || j >= fields.length) return;
     setFields((list) => {
-      const j = index + dir;
-      if (j < 0 || j >= list.length) return list;
       const next = [...list];
       [next[index], next[j]] = [next[j], next[index]];
       return next;
     });
+    // Keep focus on the same card's button; at the edge that button is inert, so use the opposite one.
+    const atEdge = (dir === -1 && j === 0) || (dir === 1 && j === fields.length - 1);
+    const button = dir === -1 ? (atEdge ? 'down' : 'up') : atEdge ? 'up' : 'down';
+    requestFocus(moveElId(field.id, button));
+    setAnnouncement(`Вопрос «${field.label.trim() || 'без текста'}» перемещён на позицию ${j + 1} из ${fields.length}`);
   }
 
   function duplicate(index: number) {
@@ -125,95 +142,97 @@ export function BuilderTab({
   }
 
   return (
-    <div className="grid gap-6 lg:grid-cols-[minmax(0,1fr)_17rem]">
-      <div className="min-w-0 space-y-6">
+    <div className="flex flex-wrap items-start gap-7">
+      <p className="sr-only" aria-live="polite">
+        {announcement}
+      </p>
+      <div className="grid min-w-0 flex-[999_1_560px] grid-cols-[minmax(0,1fr)] gap-7">
         {showResponsesNote ? (
           <Alert tone="info" title="У формы уже есть ответы">
             Изменения применятся к новым ответам. Уже полученные ответы сохранят те вопросы, на которые отвечали студенты.
           </Alert>
         ) : null}
 
-        <section aria-labelledby="settings-heading" className="rounded-xl border border-slate-200 bg-white p-4 shadow-xs sm:p-5">
+        <section aria-labelledby="settings-heading" className="grid gap-[18px] rounded-[32px] bg-neutral-100 px-5 py-6 sm:px-7 sm:py-[26px]">
           <h2 id="settings-heading" className="sr-only">
             Название и описание
           </h2>
-          <div className="grid gap-5">
-            <div>
-              <Label htmlFor="form-title">Название формы</Label>
-              <TextInput
-                id="form-title"
-                value={draft.title}
-                maxLength={LIMITS.title}
-                invalid={Boolean(errors.title)}
-                aria-describedby={errors.title ? 'form-title-error' : undefined}
-                placeholder="Например: Стажировка в отделе аналитики"
-                onChange={(e) => {
-                  const title = e.target.value;
-                  setDraft((d) => ({ ...d, title }));
-                  setErrors((er) => ({ ...er, title: undefined }));
-                }}
-                className="text-lg font-medium sm:text-base"
-              />
-              <FieldError id="form-title-error">{errors.title}</FieldError>
-            </div>
-            <div>
-              <Label htmlFor="form-description" hint="(необязательно — видно студенту под названием)">
-                Описание
-              </Label>
-              <TextArea
-                id="form-description"
-                rows={3}
-                value={draft.description}
-                maxLength={LIMITS.description}
-                invalid={Boolean(errors.description)}
-                aria-describedby={errors.description ? 'form-description-error' : 'form-description-count'}
-                placeholder="Кратко расскажите о стажировке или мероприятии и сроках"
-                onChange={(e) => {
-                  const description = e.target.value;
-                  setDraft((d) => ({ ...d, description }));
-                  setErrors((er) => ({ ...er, description: undefined }));
-                }}
-              />
-              <FieldError id="form-description-error">{errors.description}</FieldError>
-              <p id="form-description-count" className="mt-1 text-right text-xs text-slate-500">
-                {draft.description.length} / {LIMITS.description}
-              </p>
-            </div>
+          <div>
+            <Label htmlFor="form-title">Название формы</Label>
+            <TextInput
+              id="form-title"
+              value={draft.title}
+              maxLength={LIMITS.title}
+              invalid={Boolean(errors.title)}
+              aria-describedby={errors.title ? 'form-title-error' : undefined}
+              placeholder="Например: Стажировка в отделе аналитики"
+              onChange={(e) => {
+                const title = e.target.value;
+                setDraft((d) => ({ ...d, title }));
+                setErrors((er) => ({ ...er, title: undefined }));
+              }}
+              className="min-h-12 text-[17px] font-semibold"
+            />
+            <FieldError id="form-title-error">{errors.title}</FieldError>
+          </div>
+          <div>
+            <Label htmlFor="form-description" hint="видно студенту под названием">
+              Описание
+            </Label>
+            <TextArea
+              id="form-description"
+              rows={3}
+              value={draft.description}
+              maxLength={LIMITS.description}
+              invalid={Boolean(errors.description)}
+              aria-describedby={errors.description ? 'form-description-error' : 'form-description-count'}
+              placeholder="Кратко расскажите о стажировке или мероприятии и сроках"
+              onChange={(e) => {
+                const description = e.target.value;
+                setDraft((d) => ({ ...d, description }));
+                setErrors((er) => ({ ...er, description: undefined }));
+              }}
+              className="text-[15px] leading-normal"
+            />
+            <FieldError id="form-description-error">{errors.description}</FieldError>
+            <p id="form-description-count" className="mt-1 px-3 text-right text-xs text-neutral-700">
+              {draft.description.length} / {LIMITS.description}
+            </p>
           </div>
         </section>
 
         <section aria-labelledby="fields-heading">
-          <div className="mb-3 flex items-baseline justify-between gap-3">
-            <h2 id="fields-heading" className="text-base font-semibold text-slate-900">
+          <div className="mb-3.5 flex items-baseline justify-between gap-3 px-1.5">
+            <h2 id="fields-heading" className="m-0 text-[26px]">
               Вопросы
             </h2>
-            <span className="text-sm text-slate-500">
+            <span className="text-sm text-neutral-700">
               {fields.length} из {LIMITS.fields}
             </span>
           </div>
 
           {errors.fields ? (
-            <p id="fields-error" role="alert" className="mb-3 rounded-lg bg-red-50 px-3 py-2 text-sm text-red-800 ring-1 ring-red-200">
-              {errors.fields}
-            </p>
+            <Alert tone="error" role="alert" className="mb-3">
+              <span id="fields-error">{errors.fields}</span>
+            </Alert>
           ) : null}
 
           {fields.length === 0 ? (
-            <div className="rounded-xl border border-dashed border-slate-300 bg-white px-6 py-10 text-center">
-              <div className="mx-auto mb-4 flex size-12 items-center justify-center rounded-full bg-accent-soft text-accent">
-                <IconForm size={22} />
-              </div>
-              <h3 className="text-base font-semibold text-slate-900">В форме пока нет вопросов</h3>
-              <p className="mx-auto mt-2 max-w-md text-sm leading-relaxed text-slate-600">
-                Выберите тип вопроса в блоке «Добавить поле» или начните с базового набора: имя, email, телефон и согласие на обработку
-                данных.
-              </p>
-              <Button className="mt-5" onClick={addStarter} icon={<IconPlus size={16} />}>
-                Добавить базовые поля
-              </Button>
-            </div>
+            <EmptyState
+              headingLevel="h3"
+              icon={<IconForm size={24} />}
+              title="В форме пока нет вопросов"
+              action={
+                <Button onClick={addStarter} icon={<IconPlus size={16} />}>
+                  Добавить базовые поля
+                </Button>
+              }
+            >
+              Выберите тип вопроса в блоке «Добавить поле» или начните с базового набора: имя, email, телефон и согласие на обработку
+              данных.
+            </EmptyState>
           ) : (
-            <ol className="grid gap-2">
+            <ol className="m-0 grid list-none grid-cols-[minmax(0,1fr)] gap-2 p-0">
               {fields.map((f, i) => (
                 <FieldCard
                   key={f.id}
@@ -222,8 +241,8 @@ export function BuilderTab({
                   total={fields.length}
                   selected={selectedId === f.id}
                   errors={errors.byField[f.id]}
-                  onSelect={() => setSelectedId(f.id)}
-                  onCollapse={() => setSelectedId(null)}
+                  onSelect={() => select(f.id)}
+                  onCollapse={() => collapse(f.id)}
                   onChange={(patch) => update(f.id, patch)}
                   onMove={(dir) => move(i, dir)}
                   onDuplicate={() => duplicate(i)}
@@ -237,38 +256,38 @@ export function BuilderTab({
         </section>
       </div>
 
-      <aside aria-labelledby="palette-heading" className="lg:sticky lg:top-20 lg:self-start">
-        <div className="rounded-xl border border-slate-200 bg-white p-4 shadow-xs">
-          <h2 id="palette-heading" className="text-sm font-semibold text-slate-900">
-            Добавить поле
-          </h2>
-          <p className="mt-1 text-xs text-slate-500">Новое поле появится в конце списка.</p>
-          <div className="mt-3 grid grid-cols-2 gap-2 lg:grid-cols-1">
-            {FIELD_TYPES.map((t, i) => (
-              <button
-                key={t.type}
-                id={i === 0 ? PALETTE_ID : undefined}
-                type="button"
-                disabled={full}
-                onClick={() => add(t.type)}
-                className={
-                  'flex min-h-11 items-center gap-2.5 rounded-lg border border-slate-200 px-2.5 py-2 text-left text-sm text-slate-800 transition-colors ' +
-                  'hover:border-accent/50 hover:bg-accent-soft/50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent ' +
-                  'disabled:cursor-not-allowed disabled:opacity-50'
-                }
+      <aside
+        aria-labelledby="palette-heading"
+        className="max-w-full flex-[1_1_240px] rounded-[32px] bg-surface p-[22px] lg:sticky lg:top-6"
+      >
+        <h2 id="palette-heading" className="mb-1 ml-1 text-xl">
+          Добавить поле
+        </h2>
+        <p className="mb-3.5 ml-1 text-[13px] text-neutral-700">Появится в конце списка</p>
+        <div className="grid grid-cols-[repeat(auto-fill,minmax(180px,1fr))] gap-1">
+          {FIELD_TYPES.map((t, i) => (
+            <button
+              key={t.type}
+              id={i === 0 ? PALETTE_ID : undefined}
+              type="button"
+              aria-disabled={full || undefined}
+              onClick={() => add(t.type)}
+              className={
+                'flex min-h-11 cursor-pointer items-center gap-2.5 rounded-full py-1.5 pl-1.5 pr-3 text-left text-sm transition-colors ' +
+                'hover:bg-neutral-100 active:bg-neutral-200 aria-disabled:cursor-not-allowed aria-disabled:opacity-45'
+              }
+            >
+              <span
+                aria-hidden="true"
+                className="grid size-8 shrink-0 place-items-center rounded-full bg-neutral-100 font-heading text-[13px] font-semibold text-accent-800"
               >
-                <span
-                  aria-hidden="true"
-                  className="flex size-7 shrink-0 items-center justify-center rounded-md bg-slate-100 text-xs font-semibold text-slate-700"
-                >
-                  {t.icon}
-                </span>
-                <span className="min-w-0 leading-tight">{t.label}</span>
-              </button>
-            ))}
-          </div>
-          {full ? <p className="mt-3 text-xs text-amber-800">Достигнут предел — {LIMITS.fields} полей.</p> : null}
+                {t.icon}
+              </span>
+              <span className="min-w-0 leading-tight">{t.label}</span>
+            </button>
+          ))}
         </div>
+        {full ? <p className="mt-3 ml-1 text-[13px] text-accent-800">Достигнут предел — {LIMITS.fields} полей.</p> : null}
       </aside>
     </div>
   );

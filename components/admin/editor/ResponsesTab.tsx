@@ -6,7 +6,7 @@ import type { ResponseView } from '@/lib/api-client';
 import { countLabel, formatDateTime, truncate } from '@/lib/format';
 import { Button, buttonClasses } from '@/components/ui/Button';
 import { Dialog } from '@/components/ui/Dialog';
-import { Alert, EmptyState, ErrorState, Skeleton, Spinner } from '@/components/ui/feedback';
+import { Alert, EmptyState, ErrorState, LoadingStatus, Skeleton, Spinner } from '@/components/ui/feedback';
 import { IconDownload, IconInbox, IconRefresh } from '@/components/ui/icons';
 
 const PAGE_SIZE = 50;
@@ -36,7 +36,8 @@ export function ResponsesTab({
 
   if (state.status === 'loading') {
     return (
-      <div className="space-y-2" aria-busy="true" aria-label="Загрузка ответов">
+      <div className="space-y-2" aria-busy="true">
+        <LoadingStatus label="Загружаем ответы…" />
         {[0, 1, 2, 3].map((i) => (
           <Skeleton key={i} className="h-12 w-full" />
         ))}
@@ -51,17 +52,19 @@ export function ResponsesTab({
   const columns = fields.slice(0, 3);
   const openIndex = items.findIndex((r) => r.id === openId);
   const open = openIndex >= 0 ? items[openIndex] : null;
+  const newest = openIndex <= 0;
+  const oldest = openIndex >= items.length - 1;
 
   const toolbar = (
-    <div className="mb-4 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-      <p className="text-sm text-slate-600" aria-live="polite">
+    <div className="mb-4 flex flex-wrap items-center justify-between gap-3 px-1.5">
+      <p className="m-0 text-[15px] text-neutral-700" aria-live="polite">
         {total > 0 ? `${countLabel(total, ['ответ', 'ответа', 'ответов'])}, новые сверху` : 'Ответов пока нет'}
       </p>
       <div className="flex flex-wrap gap-2">
         <Button
           size="sm"
           onClick={onRefresh}
-          disabled={state.refreshing}
+          aria-disabled={state.refreshing || undefined}
           icon={state.refreshing ? <Spinner /> : <IconRefresh size={16} />}
         >
           Обновить
@@ -80,7 +83,7 @@ export function ResponsesTab({
     return (
       <div>
         {toolbar}
-        <EmptyState icon={<IconInbox size={22} />} title="Пока нет ответов">
+        <EmptyState icon={<IconInbox size={24} />} title="Пока нет ответов">
           {published
             ? 'Поделитесь ссылкой на форму со студентами — их ответы появятся здесь. Нажмите «Обновить», чтобы проверить новые.'
             : 'Опубликуйте форму и отправьте ссылку студентам — их ответы появятся здесь.'}
@@ -89,53 +92,66 @@ export function ResponsesTab({
     );
   }
 
+  const th = 'px-3 py-3.5 text-left text-[11px] font-medium uppercase tracking-[0.08em] text-ink/60 border-b border-divider';
   return (
     <div>
       {toolbar}
-      <div className="overflow-x-auto rounded-xl border border-slate-200 bg-white shadow-xs">
-        <table className="w-full min-w-[640px] text-left text-sm">
-          <thead className="border-b border-slate-200 bg-slate-50 text-xs font-semibold uppercase tracking-wide text-slate-500">
+      <div className="relative overflow-x-auto rounded-[32px] bg-neutral-100 px-3.5 py-2.5">
+        <table className="w-full min-w-[680px] border-collapse text-sm">
+          <thead>
             <tr>
-              <th scope="col" className="w-14 px-4 py-3">
+              <th scope="col" className={`${th} w-14`}>
                 №
               </th>
-              <th scope="col" className="px-4 py-3 whitespace-nowrap">
-                Дата и время отправки
+              <th scope="col" className={th}>
+                Отправлен
               </th>
               {columns.map((c) => (
-                <th key={c.id} scope="col" className="max-w-[14rem] px-4 py-3">
-                  <span className="line-clamp-2 normal-case tracking-normal">{c.label}</span>
+                <th key={c.id} scope="col" className={`${th} max-w-[14rem]`}>
+                  <span className="line-clamp-2">{c.label}</span>
                 </th>
               ))}
-              <th scope="col" className="px-4 py-3">
+              <th scope="col" className={th}>
                 <span className="sr-only">Действия</span>
               </th>
             </tr>
           </thead>
-          <tbody className="divide-y divide-slate-100">
+          <tbody>
             {items.slice(0, visible).map((r, i) => {
               const num = total - i;
               return (
-                <tr key={r.id} className="hover:bg-slate-50/70">
-                  <td className="px-4 py-3 tabular-nums text-slate-500">{num}</td>
-                  <td className="px-4 py-3 whitespace-nowrap tabular-nums text-slate-800">{formatDateTime(r.submittedAt)}</td>
-                  {columns.map((c) => {
+                <tr key={r.id} onClick={() => setOpenId(r.id)} className="cursor-pointer hover:bg-ink/4">
+                  <td className="border-b border-ink/8 px-3 py-3.5 tabular-nums text-neutral-700">{num}</td>
+                  <td className="whitespace-nowrap border-b border-ink/8 px-3 py-3.5 tabular-nums">{formatDateTime(r.submittedAt)}</td>
+                  {columns.map((c, ci) => {
                     const item = r.items.find((it) => it.fieldId === c.id);
+                    const choice = item && (item.type === 'select' || item.type === 'radio') && item.display !== '—';
                     return (
-                      <td key={c.id} className="max-w-[14rem] px-4 py-3 text-slate-700">
-                        <span className="block truncate" title={item?.display}>
-                          {item ? truncate(item.display, 48) : '—'}
-                        </span>
+                      <td key={c.id} className="max-w-[14rem] border-b border-ink/8 px-3 py-3.5">
+                        {choice ? (
+                          <span className="inline-block max-w-full truncate rounded-xl bg-accent-100 px-2.5 py-[3px] text-xs text-accent-800">
+                            {item.display}
+                          </span>
+                        ) : (
+                          <span className={`block truncate ${ci === 0 ? 'font-semibold' : 'text-neutral-800'}`} title={item?.display}>
+                            {item ? truncate(item.display, 48) : '—'}
+                          </span>
+                        )}
                       </td>
                     );
                   })}
-                  <td className="px-4 py-2 text-right">
+                  <td className="border-b border-ink/8 px-3 py-2 text-right">
                     <Button
                       id={`resp-open-${i}`}
                       size="sm"
                       variant="ghost"
-                      className="text-accent"
-                      onClick={() => setOpenId(r.id)} aria-label={`Открыть ответ №${num}`}>
+                      className="min-h-9 px-3"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        setOpenId(r.id);
+                      }}
+                      aria-label={`Открыть ответ №${num}`}
+                    >
                       Открыть
                     </Button>
                   </td>
@@ -146,8 +162,8 @@ export function ResponsesTab({
         </table>
       </div>
       {items.length > visible ? (
-        <div className="mt-3 flex flex-col items-center gap-2 sm:flex-row sm:justify-center">
-          <p className="text-sm text-slate-600">
+        <div className="mt-4 flex flex-col items-center gap-2 sm:flex-row sm:justify-center">
+          <p className="text-sm text-neutral-700">
             Показано {visible} из {items.length}
           </p>
           <Button
@@ -173,26 +189,28 @@ export function ResponsesTab({
         footer={
           open ? (
             <>
-              <Button disabled={openIndex >= items.length - 1} onClick={() => setOpenId(items[openIndex + 1]?.id ?? null)}>
-                Предыдущий
+              <Button className="flex-[1_1_auto] sm:flex-none" aria-disabled={oldest || undefined} onClick={() => setOpenId(items[openIndex + 1]?.id ?? null)}>
+                Более старый ответ
               </Button>
-              <Button disabled={openIndex <= 0} onClick={() => setOpenId(items[openIndex - 1]?.id ?? null)}>
-                Следующий
+              <Button className="flex-[1_1_auto] sm:flex-none" aria-disabled={newest || undefined} onClick={() => setOpenId(items[openIndex - 1]?.id ?? null)}>
+                Более новый ответ
               </Button>
             </>
           ) : null
         }
       >
         {open ? (
-          <div className="space-y-4">
+          <div className="grid gap-1.5">
             {open.formVersion !== formVersion ? (
-              <Alert tone="info">Отправлен в предыдущей версии формы (v{open.formVersion}). Вопросы показаны так, как их видел студент.</Alert>
+              <Alert tone="info" className="mb-1.5">
+                Отправлен в предыдущей версии формы (v{open.formVersion}). Вопросы показаны так, как их видел студент.
+              </Alert>
             ) : null}
-            <dl className="divide-y divide-slate-100">
+            <dl className="m-0 grid gap-1.5">
               {open.items.map((it) => (
-                <div key={it.fieldId} className="py-3">
-                  <dt className="text-sm font-medium text-slate-500">{it.label}</dt>
-                  <dd className="mt-1 whitespace-pre-wrap break-words text-base text-slate-900">{it.display}</dd>
+                <div key={it.fieldId} className="rounded-[22px] bg-bg px-[18px] py-3.5">
+                  <dt className="text-[13px] text-neutral-700">{it.label}</dt>
+                  <dd className="m-0 mt-1 whitespace-pre-wrap break-words text-base">{it.display}</dd>
                 </div>
               ))}
             </dl>

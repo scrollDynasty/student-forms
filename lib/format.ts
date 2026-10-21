@@ -2,6 +2,7 @@
 // so server prerendering never formats dates in a different time zone than the user's.
 
 const dateFmt = new Intl.DateTimeFormat('ru-RU', { day: 'numeric', month: 'short', year: 'numeric' });
+const shortDateFmt = new Intl.DateTimeFormat('ru-RU', { day: 'numeric', month: 'short' });
 const dateTimeFmt = new Intl.DateTimeFormat('ru-RU', {
   day: '2-digit',
   month: '2-digit',
@@ -9,6 +10,7 @@ const dateTimeFmt = new Intl.DateTimeFormat('ru-RU', {
   hour: '2-digit',
   minute: '2-digit',
 });
+const dayFmt = new Intl.DateTimeFormat('ru-RU', { day: 'numeric', month: 'long' });
 const timeFmt = new Intl.DateTimeFormat('ru-RU', { hour: '2-digit', minute: '2-digit' });
 
 function parse(iso: string): Date | null {
@@ -16,9 +18,11 @@ function parse(iso: string): Date | null {
   return Number.isNaN(d.getTime()) ? null : d;
 }
 
+/** '18 окт.' for dates in the current year, '18 окт. 2025 г.' otherwise. */
 export function formatDate(iso: string): string {
   const d = parse(iso);
-  return d ? dateFmt.format(d) : '—';
+  if (!d) return '—';
+  return d.getFullYear() === new Date().getFullYear() ? shortDateFmt.format(d) : dateFmt.format(d);
 }
 
 export function formatDateTime(iso: string): string {
@@ -26,9 +30,10 @@ export function formatDateTime(iso: string): string {
   return d ? dateTimeFmt.format(d) : '—';
 }
 
-export function formatTime(iso: string): string {
+/** '21 октября в 14:32' */
+export function formatDayTime(iso: string): string {
   const d = parse(iso);
-  return d ? timeFmt.format(d) : '—';
+  return d ? `${dayFmt.format(d)} в ${timeFmt.format(d)}` : '—';
 }
 
 /** Russian plural: plural(5, ['ответ', 'ответа', 'ответов']) → 'ответов'. */

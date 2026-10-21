@@ -98,6 +98,19 @@ export class ApiError extends Error {
 
 export const isApiError = (e: unknown): e is ApiError => e instanceof ApiError;
 
+/** Human-readable message for any thrown value (shared by all UI components). */
+export function errorMessage(e: unknown): string {
+  if (e instanceof Error && e.message) return e.message;
+  return 'Неизвестная ошибка';
+}
+
+/** Requests that take longer than this are aborted and reported like a lost connection. */
+export const REQUEST_TIMEOUT_MS = 20_000;
+const NETWORK_MESSAGE = 'Нет соединения с сервером';
+const TIMEOUT_MESSAGE = 'Сервер не ответил вовремя. Проверьте соединение и попробуйте ещё раз.';
+
+const isTimeout = (e: unknown) => e instanceof DOMException && (e.name === 'TimeoutError' || e.name === 'AbortError');
+
 const STATUS_MESSAGES: Record<number, string> = {
   400: 'Проверьте введённые данные',
   403: 'Доступ запрещён',
@@ -112,21 +125,24 @@ function isRecord(v: unknown): v is Record<string, unknown> {
 
 async function request<T>(method: string, path: string, body?: unknown): Promise<T> {
   let res: Response;
+  let text: string;
   try {
     res = await fetch(path, {
       method,
       cache: 'no-store',
+      signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
       headers: body === undefined ? { Accept: 'application/json' } : { Accept: 'application/json', 'Content-Type': 'application/json' },
       body: body === undefined ? undefined : JSON.stringify(body),
     });
-  } catch {
-    throw new ApiError(0, 'NETWORK', 'Нет соединения с сервером');
+    // The timeout also covers reading the body.
+    text = res.status === 204 ? '' : await res.text();
+  } catch (e) {
+    throw new ApiError(0, 'NETWORK', isTimeout(e) ? TIMEOUT_MESSAGE : NETWORK_MESSAGE);
   }
 
   if (res.status === 204) return null as T;
 
   let data: unknown = null;
-  const text = await res.text().catch(() => '');
   if (text) {
     try {
       data = JSON.parse(text);
@@ -154,20 +170,29 @@ async function request<T>(method: string, path: string, body?: unknown): Promise
 
 const enc = encodeURIComponent;
 
+export interface FormsListResult {
+  forms: FormSummary[];
+  /** Present when the data file was corrupt at startup and set aside under this name. */
+  storage?: { recoveredFrom?: string };
+}
+
 export const api = {
-  listForms: () => request<{ forms: FormSummary[] }>('GET', '/api/forms').then((r) => r.forms),
+  listForms: () => request<FormsListResult>('GET', '/api/forms'),
 
   createForm: (input: { title: string; description?: string; fields?: Field[] }) =>
     request<{ form: FormDto }>('POST', '/api/forms', input).then((r) => r.form),
 
-  getForm: (id: string) => request<{ form: FormDto }>('GET', `/api/forms/${enc(id)}`).then((r) => r.form),
+  getForm: (id: string) => request<{ form: FormDto; responseCount: number }>('GET', `/api/forms/${enc(id)}`),
 
   updateForm: (id: string, input: FormContentInput) =>
     request<{ form: FormDto }>('PUT', `/api/forms/${enc(id)}`, input).then((r) => r.form),
 
-  publishForm: (id: string) => request<{ form: FormDto }>('POST', `/api/forms/${enc(id)}/publish`).then((r) => r.form),
+  /** `version` guards against publishing a form that another tab has changed (409 VERSION_CONFLICT). */
+  publishForm: (id: string, version?: number) =>
+    request<{ form: FormDto }>('POST', `/api/forms/${enc(id)}/publish`, { version }).then((r) => r.form),
 
-  unpublishForm: (id: string) => request<{ form: FormDto }>('POST', `/api/forms/${enc(id)}/unpublish`).then((r) => r.form),
+  unpublishForm: (id: string, version?: number) =>
+    request<{ form: FormDto }>('POST', `/api/forms/${enc(id)}/unpublish`, { version }).then((r) => r.form),
 
   deleteForm: (id: string) => request<null>('DELETE', `/api/forms/${enc(id)}`),
 

@@ -2,13 +2,22 @@
 
 import Link from 'next/link';
 import { usePathname, useSearchParams } from 'next/navigation';
-import { useCallback, useEffect, useEffectEvent, useMemo, useRef, useState, type KeyboardEvent as ReactKeyboardEvent, type SetStateAction } from 'react';
+import {
+  useCallback,
+  useEffect,
+  useEffectEvent,
+  useMemo,
+  useRef,
+  useState,
+  type KeyboardEvent as ReactKeyboardEvent,
+  type SetStateAction,
+} from 'react';
 import { normalizeFormInput, type Field } from '@/lib/schema';
-import { api, isApiError, type FormDto } from '@/lib/api-client';
+import { api, errorMessage, isApiError, type FormDto } from '@/lib/api-client';
 import { Button, buttonClasses } from '@/components/ui/Button';
 import { ConfirmDialog } from '@/components/ui/Dialog';
-import { Alert, ErrorState, Skeleton, Spinner, StatusBadge } from '@/components/ui/feedback';
-import { IconAlert, IconCheck, IconChevronLeft, IconForm } from '@/components/ui/icons';
+import { Alert, ErrorState, LoadingStatus, Skeleton, StatusBadge } from '@/components/ui/feedback';
+import { IconChevronLeft, IconForm } from '@/components/ui/icons';
 import { useToast } from '@/components/ui/Toast';
 import { GuardedLink, useNavGuard } from '@/components/admin/NavGuard';
 import { AnalyticsTab } from './AnalyticsTab';
@@ -36,8 +45,6 @@ function serialize(d: Draft): string {
   ]);
 }
 
-const errorMessage = (e: unknown) => (e instanceof Error ? e.message : 'Неизвестная ошибка');
-
 export function FormEditor({ formId }: { formId: string }) {
   const searchParams = useSearchParams();
   const pathname = usePathname();
@@ -48,6 +55,7 @@ export function FormEditor({ formId }: { formId: string }) {
   const [load, setLoad] = useState<LoadState>({ status: 'loading' });
   const [reloadKey, setReloadKey] = useState(0);
   const [saved, setSaved] = useState<FormDto | null>(null);
+  const [responseCount, setResponseCount] = useState<number | null>(null);
   const [draft, setDraft] = useState<Draft>({ title: '', description: '', fields: [] });
   const [errors, setErrors] = useState<EditorErrors>(NO_ERRORS);
   const [busy, setBusy] = useState<Busy>(null);
@@ -57,16 +65,18 @@ export function FormEditor({ formId }: { formId: string }) {
   const [focusReq, setFocusReq] = useState<{ elId: string; select: boolean; n: number } | null>(null);
   const [confirmUnpublish, setConfirmUnpublish] = useState(false);
   const [responses, setResponses] = useState<ResponsesState>({ status: 'loading' });
+  const responsesLoaded = useRef(false);
   const [respKey, setRespKey] = useState(0);
 
   // ---- loading -------------------------------------------------------------------------------
   useEffect(() => {
     let cancelled = false;
     api.getForm(formId).then(
-      (form) => {
+      ({ form, responseCount: count }) => {
         if (cancelled) return;
         setSaved(form);
         setDraft(contentOf(form));
+        setResponseCount(count);
         setLoad({ status: 'ready' });
       },
       (e: unknown) => {
@@ -80,26 +90,34 @@ export function FormEditor({ formId }: { formId: string }) {
     };
   }, [formId, reloadKey]);
 
-  // Responses are needed for the tab counter too; re-fetched whenever the "Ответы" tab is opened.
+  // The full response list is downloaded only while the «Ответы» tab is open (the tab label uses
+  // responseCount from GET /api/forms/:id); it is re-fetched each time the tab is opened and on «Обновить».
   const onResponsesTab = tab === 'responses';
   useEffect(() => {
+    if (!onResponsesTab) return;
     let cancelled = false;
     api.listResponses(formId).then(
       (r) => {
-        if (!cancelled) setResponses({ status: 'ready', items: r.responses, total: r.total, refreshing: false });
+        if (cancelled) return;
+        responsesLoaded.current = true;
+        setResponses({ status: 'ready', items: r.responses, total: r.total, refreshing: false });
+        setResponseCount(r.total);
       },
       (e: unknown) => {
         if (cancelled) return;
-        setResponses((prev) => {
-          if (prev.status === 'ready') return { ...prev, refreshing: false };
-          return { status: 'error', message: errorMessage(e) };
-        });
+        if (responsesLoaded.current) {
+          // Keep showing the previous list, but never fail silently.
+          setResponses((prev) => (prev.status === 'ready' ? { ...prev, refreshing: false } : prev));
+          toast.error(`Не удалось обновить ответы: ${errorMessage(e)}`);
+        } else {
+          setResponses({ status: 'error', message: errorMessage(e) });
+        }
       },
     );
     return () => {
       cancelled = true;
     };
-  }, [formId, respKey, onResponsesTab]);
+  }, [formId, respKey, onResponsesTab, toast]);
 
   const refreshResponses = useCallback(() => {
     setResponses((s) => (s.status === 'ready' ? { ...s, refreshing: true } : { status: 'loading' }));
@@ -147,7 +165,7 @@ export function FormEditor({ formId }: { formId: string }) {
         return;
       }
       const smooth = !window.matchMedia('(prefers-reduced-motion: reduce)').matches;
-      el.scrollIntoView({ block: 'center', behavior: smooth ? 'smooth' : 'auto' });
+      el.scrollIntoView({ block: 'nearest', behavior: smooth ? 'smooth' : 'auto' });
       el.focus({ preventScroll: true });
       if (focusReq.select && el instanceof HTMLInputElement) el.select();
     };
@@ -163,12 +181,15 @@ export function FormEditor({ formId }: { formId: string }) {
 
   // ---- tabs (kept in ?tab= so deep links and the back button work) ---------------------------
   const setTab = useCallback(
-    (next: Tab) => {
+    (next: Tab, mode: 'push' | 'replace' = 'push') => {
       const qs = new URLSearchParams(searchParams.toString());
       if (next === 'builder') qs.delete('tab');
       else qs.set('tab', next);
       const s = qs.toString();
-      window.history.pushState(null, '', s ? `${pathname}?${s}` : pathname);
+      const url = s ? `${pathname}?${s}` : pathname;
+      // Arrow-key browsing replaces the entry so it doesn't flood the history.
+      if (mode === 'replace') window.history.replaceState(null, '', url);
+      else window.history.pushState(null, '', url);
     },
     [pathname, searchParams],
   );
@@ -199,19 +220,19 @@ export function FormEditor({ formId }: { formId: string }) {
     toast.error(`Не удалось ${action}: ${errorMessage(e)}`);
   }
 
-  async function save(): Promise<boolean> {
-    if (!saved || busyRef.current) return false;
-    if (!dirty) return true;
+  async function save(): Promise<FormDto | null> {
+    if (!saved || busyRef.current) return null;
+    if (!dirty) return saved;
     if (conflict) {
       toast.error('Форму изменили в другой вкладке. Сначала загрузите актуальную версию.');
-      return false;
+      return null;
     }
     const snapshot = draft;
     const check = normalizeFormInput(snapshot);
     if (Object.keys(check.errors).length > 0) {
       showErrors(mapErrors(check.errors, snapshot.fields), snapshot.fields);
       toast.error('Исправьте ошибки перед сохранением');
-      return false;
+      return null;
     }
     busyRef.current = true;
     setBusy('save');
@@ -222,10 +243,10 @@ export function FormEditor({ formId }: { formId: string }) {
       setDraft((cur) => (cur === snapshot ? contentOf(form) : cur));
       setErrors(NO_ERRORS);
       toast.success('Сохранено');
-      return true;
+      return form;
     } catch (e) {
       handleMutationError(e, snapshot.fields, 'сохранить');
-      return false;
+      return null;
     } finally {
       busyRef.current = false;
       setBusy(null);
@@ -234,14 +255,17 @@ export function FormEditor({ formId }: { formId: string }) {
 
   async function publish() {
     if (!saved || busyRef.current) return;
-    if (dirty) {
-      const ok = await save();
-      if (!ok) return;
+    if (conflict) {
+      toast.error('Форму изменили в другой вкладке. Сначала загрузите актуальную версию.');
+      return;
     }
+    // Publishing with unsaved changes saves first and stops if saving fails.
+    const current = dirty ? await save() : saved;
+    if (!current) return;
     busyRef.current = true;
     setBusy('publish');
     try {
-      const form = await api.publishForm(saved.id);
+      const form = await api.publishForm(current.id, current.version);
       setSaved(form);
       toast.success('Форма опубликована');
       requestFocus('unpublish-button');
@@ -258,7 +282,7 @@ export function FormEditor({ formId }: { formId: string }) {
     busyRef.current = true;
     setBusy('unpublish');
     try {
-      const form = await api.unpublishForm(saved.id);
+      const form = await api.unpublishForm(saved.id, saved.version);
       setSaved(form);
       setConfirmUnpublish(false);
       toast.success('Публикация снята');
@@ -277,9 +301,10 @@ export function FormEditor({ formId }: { formId: string }) {
     busyRef.current = true;
     setBusy('reload');
     try {
-      const form = await api.getForm(formId);
+      const { form, responseCount: count } = await api.getForm(formId);
       setSaved(form);
       setDraft(contentOf(form));
+      setResponseCount(count);
       setErrors(NO_ERRORS);
       setConflict(false);
       setSelectedId(null);
@@ -311,41 +336,44 @@ export function FormEditor({ formId }: { formId: string }) {
 
   if (load.status === 'not_found') {
     return (
-      <div className="mx-auto max-w-xl px-4 py-16 text-center">
-        <div className="mx-auto mb-4 flex size-12 items-center justify-center rounded-full bg-accent-soft text-accent">
-          <IconForm size={22} />
+      <div className="mx-auto max-w-[1120px] px-4 pb-24 pt-9 sm:px-7">
+        <div className="max-w-xl rounded-[32px] bg-neutral-100 px-6 py-10 sm:px-9">
+          <div className="mb-5 flex size-14 items-center justify-center rounded-full bg-accent-2-200 text-accent-2-800">
+            <IconForm size={24} />
+          </div>
+          <h1 className="text-[30px]">Форма не найдена</h1>
+          <p className="mt-2 text-[15px] text-neutral-700">Возможно, её удалили или в ссылке ошибка.</p>
+          <Link href="/admin" className={buttonClasses('primary', 'md', 'mt-6')}>
+            К списку форм
+          </Link>
         </div>
-        <h1 className="text-xl font-semibold text-slate-900">Форма не найдена</h1>
-        <p className="mt-2 text-sm text-slate-600">Возможно, её удалили или в ссылке ошибка.</p>
-        <Link href="/admin" className={buttonClasses('primary', 'md', 'mt-6')}>
-          К списку форм
-        </Link>
       </div>
     );
   }
 
   if (load.status === 'error' || !saved) {
     return (
-      <div className="mx-auto max-w-xl px-4 py-12">
-        <ErrorState
-          title="Не удалось загрузить форму"
-          message={load.status === 'error' ? load.message : undefined}
-          onRetry={() => {
-            setLoad({ status: 'loading' });
-            setReloadKey((k) => k + 1);
-          }}
-        />
+      <div className="mx-auto max-w-[1120px] px-4 pb-24 pt-9 sm:px-7">
+        <div className="max-w-xl">
+          <ErrorState
+            title="Не удалось загрузить форму"
+            message={load.status === 'error' ? load.message : undefined}
+            onRetry={() => {
+              setLoad({ status: 'loading' });
+              setReloadKey((k) => k + 1);
+            }}
+          />
+        </div>
       </div>
     );
   }
 
   const published = saved.status === 'published';
-  const total = responses.status === 'ready' ? responses.total : null;
   const errorCount = countErrors(errors);
   const tabs: { id: Tab; label: string }[] = [
     { id: 'builder', label: 'Конструктор' },
     { id: 'preview', label: 'Предпросмотр' },
-    { id: 'responses', label: total === null ? 'Ответы' : `Ответы (${total})` },
+    { id: 'responses', label: responseCount === null ? 'Ответы' : `Ответы · ${responseCount}` },
     { id: 'analytics', label: 'Аналитика' },
   ];
 
@@ -358,71 +386,68 @@ export function FormEditor({ formId }: { formId: string }) {
     else if (e.key === 'End') next = TAB_IDS.length - 1;
     if (next === null) return;
     e.preventDefault();
-    setTab(TAB_IDS[next]);
+    setTab(TAB_IDS[next], 'replace');
     document.getElementById(`tab-${TAB_IDS[next]}`)?.focus();
   }
 
   const saveState =
-    busy === 'save' ? (
-      <span className="inline-flex items-center gap-1.5 text-slate-600">
-        <Spinner className="size-3.5" /> Сохранение…
-      </span>
-    ) : dirty ? (
-      <span className="inline-flex items-center gap-1.5 text-amber-800">
-        <span aria-hidden="true" className="size-2 rounded-full bg-amber-500" /> Есть несохранённые изменения
-      </span>
-    ) : (
-      <span className="inline-flex items-center gap-1.5 text-emerald-800">
-        <IconCheck size={14} /> Все изменения сохранены
-      </span>
-    );
+    busy === 'save'
+      ? { dot: 'bg-neutral-500', text: 'Сохранение…' }
+      : dirty
+        ? { dot: 'bg-accent', text: 'Есть несохранённые изменения' }
+        : { dot: 'bg-accent-2', text: 'Все изменения сохранены' };
 
   return (
     <div>
-      <div className="border-b border-slate-200 bg-white">
-        <div className="mx-auto max-w-6xl px-4 pt-4 sm:px-6">
-          <GuardedLink
-            href="/admin"
-            className="inline-flex min-h-9 items-center gap-1 rounded-lg pr-2 text-sm font-medium text-slate-600 hover:text-slate-900 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent"
-          >
-            <IconChevronLeft size={16} /> Все формы
-          </GuardedLink>
+      <div className="mx-auto max-w-[1120px] px-4 pt-3 sm:px-7">
+        <GuardedLink
+          href="/admin"
+          className={buttonClasses('ghost', 'sm', '-ml-1 gap-1 py-1.5 pl-1 pr-2.5 text-[15px] text-neutral-700 hover:text-ink')}
+        >
+          <IconChevronLeft /> Все формы
+        </GuardedLink>
 
-          <div className="mt-2 flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
-            <div className="min-w-0">
-              <div className="flex min-w-0 flex-wrap items-center gap-2">
-                <h1 className="min-w-0 truncate text-xl font-semibold tracking-tight text-slate-900 sm:text-2xl">
-                  {draft.title.trim() || 'Без названия'}
-                </h1>
-                <StatusBadge status={saved.status} />
-              </div>
-              <p className="mt-1 text-sm" aria-live="polite">
-                {saveState}
-              </p>
+        <div className="mt-2.5 flex flex-wrap items-end justify-between gap-5">
+          <div className="min-w-0">
+            <div className="flex min-w-0 flex-wrap items-center gap-3">
+              <h1 className="m-0 min-w-0 break-words text-[28px] sm:text-[38px]">{draft.title.trim() || 'Без названия'}</h1>
+              <StatusBadge status={saved.status} />
             </div>
-            <div className="flex flex-wrap gap-2">
-              <Button onClick={() => void save()} disabled={!dirty || busy !== null} title="Сохранить (Ctrl+S)">
-                {busy === 'save' ? 'Сохранение…' : 'Сохранить'}
-              </Button>
-              {published ? (
-                <Button id="unpublish-button" onClick={() => setConfirmUnpublish(true)} disabled={busy !== null}>
-                  Снять с публикации
-                </Button>
-              ) : (
-                <Button
-                  id="publish-button"
-                  variant="primary"
-                  onClick={() => void publish()}
-                  disabled={busy !== null}
-                  title={dirty ? 'Сначала сохранит изменения, затем опубликует' : undefined}
-                >
-                  {busy === 'publish' ? 'Публикация…' : 'Опубликовать'}
-                </Button>
-              )}
-            </div>
+            <p className="mt-2 flex items-center gap-2 text-sm text-neutral-700" aria-live="polite">
+              <span aria-hidden="true" className={`size-2 rounded-full ${saveState.dot}`} />
+              {saveState.text}
+            </p>
           </div>
+          <div className="flex flex-wrap gap-2">
+            <Button onClick={() => void save()} aria-disabled={!dirty || busy !== null || undefined} title="Сохранить (Ctrl+S)" className="px-5">
+              {busy === 'save' ? 'Сохранение…' : 'Сохранить'}
+            </Button>
+            {published ? (
+              <Button id="unpublish-button" onClick={() => setConfirmUnpublish(true)} aria-disabled={busy !== null || undefined}>
+                Снять с публикации
+              </Button>
+            ) : (
+              <Button
+                id="publish-button"
+                variant="primary"
+                onClick={() => void publish()}
+                aria-disabled={busy !== null || undefined}
+                title={dirty ? 'Сначала сохранит изменения, затем опубликует' : undefined}
+                className="px-[22px]"
+              >
+                {busy === 'publish' ? 'Публикация…' : 'Опубликовать'}
+              </Button>
+            )}
+          </div>
+        </div>
 
-          <div role="tablist" aria-label="Разделы формы" onKeyDown={onTabKeyDown} className="-mx-4 mt-4 flex overflow-x-auto px-4 [scrollbar-width:none] sm:-mx-6 sm:px-6">
+        <div className="mt-7 flex flex-wrap items-center justify-between gap-4">
+          <div
+            role="tablist"
+            aria-label="Разделы формы"
+            onKeyDown={onTabKeyDown}
+            className="inline-flex max-w-full gap-1 overflow-x-auto rounded-full bg-surface p-[5px] [scrollbar-width:none]"
+          >
             {tabs.map((t) => {
               const active = t.id === tab;
               return (
@@ -436,9 +461,8 @@ export function FormEditor({ formId }: { formId: string }) {
                   tabIndex={active ? 0 : -1}
                   onClick={() => setTab(t.id)}
                   className={
-                    'relative min-h-11 shrink-0 whitespace-nowrap border-b-2 px-3 text-sm font-medium transition-colors sm:px-4 ' +
-                    'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-accent ' +
-                    (active ? 'border-accent text-accent' : 'border-transparent text-slate-600 hover:border-slate-300 hover:text-slate-900')
+                    'min-h-10 shrink-0 cursor-pointer whitespace-nowrap rounded-full px-[18px] py-2.5 text-sm font-semibold transition-colors ' +
+                    (active ? 'bg-neutral-100 text-ink shadow-sm' : 'text-neutral-700 hover:bg-neutral-100/60 hover:text-ink')
                   }
                 >
                   {t.label}
@@ -446,23 +470,24 @@ export function FormEditor({ formId }: { formId: string }) {
               );
             })}
           </div>
+          {published ? <PublicLinkBox publicId={saved.publicId} /> : null}
         </div>
       </div>
 
-      <div className="mx-auto max-w-6xl space-y-4 px-4 py-6 sm:px-6">
+      <div className="mx-auto max-w-[1120px] space-y-4 px-4 pb-24 pt-7 sm:px-7">
         {conflict ? (
           <Alert
             tone="warning"
             role="alert"
             title="Форму изменили в другой вкладке"
             actions={
-              <Button variant="primary" size="sm" onClick={() => void reloadLatest()} disabled={busy !== null}>
+              <Button variant="primary" size="sm" onClick={() => void reloadLatest()} aria-disabled={busy !== null || undefined}>
                 {busy === 'reload' ? 'Загрузка…' : 'Загрузить актуальную версию'}
               </Button>
             }
           >
-            Пока вы редактировали, эту форму сохранили в другом окне. Чтобы не затереть чужие изменения, сохранение остановлено. Загрузите
-            актуальную версию — ваши несохранённые правки в этой вкладке будут отменены.
+            Пока вы редактировали, эту форму сохранили в другом окне. Чтобы не затереть чужие изменения, сохранение и публикация
+            остановлены. Загрузите актуальную версию — ваши несохранённые правки в этой вкладке будут отменены.
           </Alert>
         ) : null}
 
@@ -485,7 +510,7 @@ export function FormEditor({ formId }: { formId: string }) {
               </Button>
             }
           >
-            {errorCount === 1 ? 'Найдена 1 ошибка — она отмечена красным.' : `Найдено ошибок: ${errorCount}. Они отмечены красным.`}
+            {errorCount === 1 ? 'Найдена 1 ошибка — она отмечена в форме.' : `Найдено ошибок: ${errorCount}. Они отмечены в форме.`}
             {errors.other.length > 0 ? (
               <ul className="mt-1 list-disc pl-5">
                 {errors.other.map((m, i) => (
@@ -496,13 +521,8 @@ export function FormEditor({ formId }: { formId: string }) {
           </Alert>
         ) : null}
 
-        {published ? <PublicLinkBox publicId={saved.publicId} /> : null}
-
         {!published && tab === 'builder' && draft.fields.length > 0 && errorCount === 0 ? (
-          <p className="flex items-center gap-2 text-sm text-slate-600">
-            <IconAlert size={16} className="shrink-0 text-slate-500" />
-            Форма в черновике: студенты не увидят её, пока вы не нажмёте «Опубликовать».
-          </p>
+          <p className="px-1.5 text-sm text-neutral-700">Форма в черновике: студенты не увидят её, пока вы не нажмёте «Опубликовать».</p>
         ) : null}
 
         <div role="tabpanel" id={`panel-${tab}`} aria-labelledby={`tab-${tab}`}>
@@ -515,7 +535,7 @@ export function FormEditor({ formId }: { formId: string }) {
               selectedId={selectedId}
               setSelectedId={setSelectedId}
               requestFocus={requestFocus}
-              showResponsesNote={published && total !== null && total > 0}
+              showResponsesNote={published && (responseCount ?? 0) > 0}
             />
           ) : null}
           {tab === 'preview' ? <PreviewTab draft={draft} /> : null}
@@ -548,23 +568,18 @@ export function FormEditor({ formId }: { formId: string }) {
 
 export function EditorSkeleton() {
   return (
-    <div aria-busy="true" aria-label="Загрузка формы">
-      <div className="border-b border-slate-200 bg-white">
-        <div className="mx-auto max-w-6xl px-4 pb-4 pt-4 sm:px-6">
-          <Skeleton className="h-4 w-24" />
-          <Skeleton className="mt-4 h-7 w-64 max-w-full" />
-          <Skeleton className="mt-2 h-4 w-48" />
-          <div className="mt-6 flex gap-4">
-            {[0, 1, 2, 3].map((i) => (
-              <Skeleton key={i} className="h-6 w-24" />
-            ))}
-          </div>
-        </div>
+    <div aria-busy="true">
+      <LoadingStatus label="Загружаем форму…" />
+      <div className="mx-auto max-w-[1120px] px-4 pt-3 sm:px-7">
+        <Skeleton className="h-6 w-28" />
+        <Skeleton className="mt-4 h-10 w-80 max-w-full" />
+        <Skeleton className="mt-3 h-4 w-52" />
+        <Skeleton className="mt-7 h-[50px] w-[460px] max-w-full" />
       </div>
-      <div className="mx-auto max-w-6xl space-y-3 px-4 py-6 sm:px-6">
-        <Skeleton className="h-32 w-full" />
-        <Skeleton className="h-14 w-full" />
-        <Skeleton className="h-14 w-full" />
+      <div className="mx-auto max-w-[1120px] space-y-3 px-4 pt-7 sm:px-7">
+        <div className="h-40 animate-pulse rounded-[32px] bg-neutral-200 motion-reduce:animate-none" aria-hidden="true" />
+        <Skeleton className="h-[60px] w-full" />
+        <Skeleton className="h-[60px] w-full" />
       </div>
     </div>
   );

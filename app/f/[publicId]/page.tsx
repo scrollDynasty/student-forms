@@ -9,10 +9,11 @@ export const metadata: Metadata = {
 
 function Fallback() {
   return (
-    <div className="min-h-dvh bg-gradient-to-b from-indigo-50/80 via-background to-background">
-      <div className="mx-auto w-full max-w-2xl px-4 py-6 sm:py-12">
-        <div className="h-96 animate-pulse rounded-2xl border border-slate-200 bg-white motion-reduce:animate-none" aria-hidden="true" />
-      </div>
+    <div className="mx-auto w-full max-w-[680px] flex-1 px-4 pb-[72px] pt-7 sm:px-5 sm:pt-12">
+      <p role="status" className="sr-only">
+        Загрузка…
+      </p>
+      <div className="h-96 animate-pulse rounded-[36px] bg-neutral-200 motion-reduce:animate-none" aria-hidden="true" />
     </div>
   );
 }

@@ -1,48 +1,59 @@
 @import "tailwindcss";
 
-:root {
-  --background: #f6f7fb;
-  --foreground: #0f172a;
-  --surface: #ffffff;
-  --accent: #4f46e5;
-  --accent-strong: #4338ca;
-  --accent-soft: #eef2ff;
-}
+/*
+ * Organic design system (cream ground, terracotta accent, sage second accent), ported from
+ * "Современный редизайн форм откликов/_ds/organic…/styles.css" into Tailwind 4 theme tokens:
+ * bg-bg, bg-surface, text-ink, bg-accent, text-accent-700, bg-accent-2-200, bg-neutral-100, shadow-md…
+ * Fonts are self-hosted (@fontsource-variable/rubik, imported in app/layout.tsx) — nothing is fetched at runtime.
+ */
+@theme {
+  --color-bg: #f5ead8;
+  --color-surface: #ebddc5;
+  --color-ink: #201e1d;
+  --color-divider: color-mix(in srgb, #201e1d 16%, transparent);
 
-@theme inline {
-  --color-background: var(--background);
-  --color-foreground: var(--foreground);
-  --color-surface: var(--surface);
-  --color-accent: var(--accent);
-  --color-accent-strong: var(--accent-strong);
-  --color-accent-soft: var(--accent-soft);
-  --font-sans: var(--font-geist-sans);
-  --font-mono: var(--font-geist-mono);
-}
+  --color-accent: #c67139;
+  --color-accent-100: #fff2eb;
+  --color-accent-200: #ffe1d0;
+  --color-accent-300: #ffc6a5;
+  --color-accent-400: #f6a06b;
+  --color-accent-500: #d67f48;
+  --color-accent-600: #b2622d;
+  --color-accent-700: #8c491a;
+  --color-accent-800: #643312;
+  --color-accent-900: #402310;
 
-/* Base styles live in the base layer so Tailwind utilities (e.g. max-w-*, p-*) can override them. */
-@layer base {
-  html {
-    color-scheme: light;
-  }
+  --color-accent-2: #7a8a5e;
+  --color-accent-2-100: #f0fae1;
+  --color-accent-2-200: #e1eecc;
+  --color-accent-2-300: #ccdbb2;
+  --color-accent-2-400: #aebf92;
+  --color-accent-2-500: #8fa073;
+  --color-accent-2-600: #728157;
+  --color-accent-2-700: #56633f;
+  --color-accent-2-800: #3d472b;
+  --color-accent-2-900: #272e1b;
 
-  body {
-    background: var(--background);
-    color: var(--foreground);
-    font-family: var(--font-geist-sans), ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, Arial, sans-serif;
-  }
+  --color-neutral-100: #f9f4ed;
+  --color-neutral-200: #eee7db;
+  --color-neutral-300: #dcd3c4;
+  --color-neutral-400: #c0b6a5;
+  --color-neutral-500: #a19786;
+  --color-neutral-600: #82796a;
+  --color-neutral-700: #645c50;
+  --color-neutral-800: #474238;
+  --color-neutral-900: #2e2b25;
 
-  /* Native <dialog>: dimmed backdrop, no default border/padding. */
-  dialog {
-    padding: 0;
-    border: 0;
-    background: transparent;
-    max-width: none;
-    max-height: none;
-  }
-  dialog::backdrop {
-    background: rgb(15 23 42 / 0.45);
-  }
+  --font-sans: "Rubik Variable", system-ui, -apple-system, "Segoe UI", Roboto, Arial, sans-serif;
+  --font-heading: "Rubik Variable", system-ui, -apple-system, "Segoe UI", Roboto, Arial, sans-serif;
+
+  --shadow-sm: 0 1px 2px color-mix(in srgb, #2e2b25 14%, transparent);
+  --shadow-md: 0 3px 10px color-mix(in srgb, #2e2b25 16%, transparent);
+  --shadow-lg: 0 12px 32px color-mix(in srgb, #2e2b25 22%, transparent);
+
+  --animate-toast-in: toast-in 180ms ease-out;
+  --animate-drawer-in: drawer-in 200ms ease-out;
+  --animate-dialog-in: dialog-in 160ms ease-out;
 }
 
 @keyframes toast-in {
@@ -55,22 +66,92 @@
     transform: translateY(0);
   }
 }
-.animate-toast-in {
-  animation: toast-in 160ms ease-out;
-}
-
 @keyframes drawer-in {
   from {
-    transform: translateX(24px);
     opacity: 0.6;
+    transform: translateX(24px);
   }
   to {
-    transform: translateX(0);
     opacity: 1;
+    transform: translateX(0);
   }
 }
-.animate-drawer-in {
-  animation: drawer-in 180ms ease-out;
+@keyframes dialog-in {
+  from {
+    opacity: 0;
+    transform: scale(0.97);
+  }
+  to {
+    opacity: 1;
+    transform: scale(1);
+  }
+}
+
+/* Base styles live in the base layer so utilities can override them. */
+@layer base {
+  html {
+    color-scheme: light;
+  }
+
+  body {
+    background: var(--color-bg);
+    color: var(--color-ink);
+    font-family: var(--font-sans);
+    font-size: 15px;
+    line-height: 1.55;
+    font-weight: 400;
+  }
+
+  h1,
+  h2,
+  h3,
+  h4 {
+    font-family: var(--font-heading);
+    font-weight: 600;
+    line-height: 1.12;
+    letter-spacing: -0.025em;
+  }
+
+  a {
+    color: var(--color-accent-700);
+    text-underline-offset: 3px;
+  }
+  a:hover {
+    color: var(--color-accent-800);
+  }
+
+  input,
+  select,
+  textarea,
+  button {
+    font-family: inherit;
+  }
+
+  /* Organic focus ring: one themed outline for every control, never the browser default. */
+  :focus {
+    outline: none;
+  }
+  :focus-visible {
+    outline: 2px solid var(--color-accent);
+    outline-offset: 2px;
+  }
+
+  ::selection {
+    background: color-mix(in srgb, var(--color-accent) 30%, transparent);
+  }
+
+  /* Native <dialog>: no default chrome, themed backdrop. */
+  dialog {
+    padding: 0;
+    border: 0;
+    background: transparent;
+    color: inherit;
+    max-width: none;
+    max-height: none;
+  }
+  dialog::backdrop {
+    background: color-mix(in srgb, var(--color-neutral-900) 45%, transparent);
+  }
 }
 
 @media (prefers-reduced-motion: reduce) {

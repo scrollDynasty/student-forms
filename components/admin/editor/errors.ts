@@ -72,6 +72,8 @@ export const optElId = (fieldId: string, optId: string) => `fe-${fieldId}-opt-${
 export const PALETTE_ID = 'add-field-palette';
 /** The collapsed card's summary button. */
 export const summaryElId = (fieldId: string) => `fe-${fieldId}-summary`;
+/** The card's «выше» / «ниже» buttons (same ids whether the card is collapsed or expanded). */
+export const moveElId = (fieldId: string, dir: 'up' | 'down') => `fe-${fieldId}-move-${dir}`;
 
 /** The element to focus for the first error, in on-screen order. */
 export function firstErrorTarget(e: EditorErrors, fields: Field[]): { elId: string; fieldId?: string } | null {

@@ -1,13 +1,15 @@
 'use client';
 
 import { useEffect, useRef } from 'react';
-import { formatDateTime } from '@/lib/format';
+import { formatDayTime } from '@/lib/format';
+import { Button } from '@/components/ui/Button';
 import { IconCheck } from '@/components/ui/icons';
 
 export function SubmitSuccess({
   title,
   submittedAt,
   note,
+  message,
   againLabel = 'Отправить ещё один ответ',
   onAgain,
   headingLevel = 'h1',
@@ -15,6 +17,8 @@ export function SubmitSuccess({
   title: string;
   submittedAt: string;
   note?: string;
+  /** Replaces the default «Спасибо! Организатор … получил ваши ответы …» text. */
+  message?: string;
   againLabel?: string;
   onAgain: () => void;
   /** h1 on the public page (it is the page's main heading), h2 inside the admin preview. */
@@ -27,29 +31,21 @@ export function SubmitSuccess({
   }, []);
 
   return (
-    <div className="@container overflow-hidden rounded-2xl border border-slate-200 bg-white text-center shadow-sm">
-      <div className="h-1.5 bg-gradient-to-r from-emerald-400 via-teal-400 to-emerald-500" aria-hidden="true" />
-      <div className="px-6 py-12 @lg:px-10">
-        <div className="mx-auto flex size-14 items-center justify-center rounded-full bg-emerald-50 text-emerald-600 ring-8 ring-emerald-50/50">
-          <IconCheck size={28} />
+    <div className="@container">
+      <div className="rounded-[36px] bg-neutral-100 px-6 py-12 shadow-sm @lg:px-9 @lg:py-14">
+        <div className="grid size-[72px] place-items-center rounded-full bg-accent-2 text-neutral-100">
+          <IconCheck size={32} />
         </div>
-        <Heading ref={headingRef} tabIndex={-1} className="mt-6 text-2xl font-semibold tracking-tight text-slate-900 focus:outline-none">
-          Спасибо! Ваш ответ отправлен
+        <Heading ref={headingRef} tabIndex={-1} className="mb-0 mt-7 text-[30px] outline-none @lg:text-[36px]">
+          Ответ отправлен
         </Heading>
-        <p className="mt-3 text-base leading-relaxed text-slate-600">
-          Форма «{title}» · {formatDateTime(submittedAt)}
+        <p className="mb-0 mt-3 max-w-[440px] text-base text-neutral-800">
+          {message ?? `Спасибо! Организатор «${title}» получил ваши ответы ${formatDayTime(submittedAt)}.`}
         </p>
-        {note ? <p className="mt-2 text-sm text-slate-500">{note}</p> : null}
-        <button
-          type="button"
-          onClick={onAgain}
-          className={
-            'mt-8 inline-flex min-h-12 items-center justify-center rounded-xl border border-slate-300 bg-white px-5 text-base font-medium text-slate-800 ' +
-            'transition-colors hover:bg-slate-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent focus-visible:ring-offset-2'
-          }
-        >
+        {note ? <p className="mb-0 mt-2 text-sm text-neutral-700">{note}</p> : null}
+        <Button onClick={onAgain} className="mt-7 px-[22px]">
           {againLabel}
-        </button>
+        </Button>
       </div>
     </div>
   );
