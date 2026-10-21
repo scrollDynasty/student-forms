@@ -9,6 +9,8 @@ import { Dialog } from '@/components/ui/Dialog';
 import { Alert, EmptyState, ErrorState, Skeleton, Spinner } from '@/components/ui/feedback';
 import { IconDownload, IconInbox, IconRefresh } from '@/components/ui/icons';
 
+const PAGE_SIZE = 50;
+
 export type ResponsesState =
   | { status: 'loading' }
   | { status: 'error'; message: string }
@@ -30,6 +32,7 @@ export function ResponsesTab({
   published: boolean;
 }) {
   const [openId, setOpenId] = useState<string | null>(null);
+  const [visible, setVisible] = useState(PAGE_SIZE);
 
   if (state.status === 'loading') {
     return (
@@ -110,7 +113,7 @@ export function ResponsesTab({
             </tr>
           </thead>
           <tbody className="divide-y divide-slate-100">
-            {items.map((r, i) => {
+            {items.slice(0, visible).map((r, i) => {
               const num = total - i;
               return (
                 <tr key={r.id} className="hover:bg-slate-50/70">
@@ -127,7 +130,12 @@ export function ResponsesTab({
                     );
                   })}
                   <td className="px-4 py-2 text-right">
-                    <Button size="sm" variant="ghost" className="text-accent" onClick={() => setOpenId(r.id)} aria-label={`Открыть ответ №${num}`}>
+                    <Button
+                      id={`resp-open-${i}`}
+                      size="sm"
+                      variant="ghost"
+                      className="text-accent"
+                      onClick={() => setOpenId(r.id)} aria-label={`Открыть ответ №${num}`}>
                       Открыть
                     </Button>
                   </td>
@@ -137,6 +145,24 @@ export function ResponsesTab({
           </tbody>
         </table>
       </div>
+      {items.length > visible ? (
+        <div className="mt-3 flex flex-col items-center gap-2 sm:flex-row sm:justify-center">
+          <p className="text-sm text-slate-600">
+            Показано {visible} из {items.length}
+          </p>
+          <Button
+            size="sm"
+            onClick={() => {
+              const firstNew = visible;
+              setVisible((v) => v + PAGE_SIZE);
+              // Move focus to the first newly shown row so keyboard users continue from there.
+              requestAnimationFrame(() => document.getElementById(`resp-open-${firstNew}`)?.focus());
+            }}
+          >
+            Показать ещё {Math.min(PAGE_SIZE, items.length - visible)}
+          </Button>
+        </div>
+      ) : null}
 
       <Dialog
         open={open !== null}

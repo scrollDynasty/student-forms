@@ -1,5 +1,6 @@
 'use client';
 
+import { useRef } from 'react';
 import {
   FIELD_TYPES,
   LIMITS,
@@ -15,7 +16,7 @@ import {
 import { Button, IconButton } from '@/components/ui/Button';
 import { FieldError, Label, TextInput, Toggle, inputClasses } from '@/components/ui/inputs';
 import { IconArrowDown, IconArrowUp, IconChevronDown, IconCopy, IconPlus, IconTrash, IconX } from '@/components/ui/icons';
-import { fieldElId, hasFieldErrors, optElId, type FieldErrors } from './errors';
+import { fieldElId, hasFieldErrors, optElId, summaryElId, type FieldErrors } from './errors';
 
 export function nextOptionLabel(options: Option[]): string {
   const used = new Set(options.map((o) => o.label.trim().toLowerCase()));
@@ -64,6 +65,13 @@ export function FieldCard({
   requestFocus: (elId: string, select?: boolean) => void;
   canDuplicate: boolean;
 }) {
+  // Settings a type switch would drop, kept so that switching back restores them.
+  const stash = useRef<{ options: Option[]; placeholder: string; min: number | null; max: number | null }>({
+    options: [],
+    placeholder: '',
+    min: null,
+    max: null,
+  });
   const invalid = hasFieldErrors(errors);
   const num = index + 1;
 
@@ -93,6 +101,7 @@ export function FieldCard({
         }
       >
         <button
+          id={summaryElId(field.id)}
           type="button"
           onClick={onSelect}
           aria-expanded={false}
@@ -101,7 +110,7 @@ export function FieldCard({
           <TypeIcon type={field.type} />
           <span className="min-w-0 flex-1">
             <span className="block truncate text-sm font-medium text-slate-900">
-              <span className="text-slate-400">{num}.</span> {field.label.trim() || 'Вопрос без текста'}
+              <span className="text-slate-500">{num}.</span> {field.label.trim() || 'Вопрос без текста'}
             </span>
             <span className="block truncate text-xs text-slate-500">
               {fieldTypeLabel(field.type)}
@@ -116,10 +125,19 @@ export function FieldCard({
   }
 
   function changeType(type: FieldType) {
+    const saved = stash.current;
+    // Remember what this switch would throw away.
+    if (field.options.length > 0) saved.options = field.options;
+    if (field.placeholder) saved.placeholder = field.placeholder;
+    if (field.min !== null || field.max !== null) {
+      saved.min = field.min;
+      saved.max = field.max;
+    }
+
     const patch: Partial<Field> = { type };
     if (isChoiceType(type)) {
       if (field.options.length < 2) {
-        const opts = [...field.options];
+        const opts = field.options.length === 0 ? [...saved.options] : [...field.options];
         while (opts.length < 2) opts.push({ id: generateId(), label: nextOptionLabel(opts) });
         patch.options = opts;
       }
@@ -127,9 +145,13 @@ export function FieldCard({
       patch.options = [];
     }
     if (!hasPlaceholder(type)) patch.placeholder = '';
+    else if (!field.placeholder && saved.placeholder) patch.placeholder = saved.placeholder;
     if (type !== 'number') {
       patch.min = null;
       patch.max = null;
+    } else if (field.min === null && field.max === null) {
+      patch.min = saved.min;
+      patch.max = saved.max;
     }
     onChange(patch);
   }
@@ -317,7 +339,7 @@ function OptionsEditor({
           return (
             <li key={opt.id}>
               <div className="flex items-center gap-1">
-                <span aria-hidden="true" className="w-6 shrink-0 text-right text-sm text-slate-400">
+                <span aria-hidden="true" className="w-6 shrink-0 text-right text-sm text-slate-500">
                   {i + 1}.
                 </span>
                 <TextInput

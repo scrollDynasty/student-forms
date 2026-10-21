@@ -3,11 +3,12 @@
 import type { Dispatch, SetStateAction } from 'react';
 import { FIELD_TYPES, LIMITS, createField, generateId, type Field, type FieldType } from '@/lib/schema';
 import { Button } from '@/components/ui/Button';
+import { useToast } from '@/components/ui/Toast';
 import { Alert } from '@/components/ui/feedback';
 import { FieldError, Label, TextArea, TextInput } from '@/components/ui/inputs';
 import { IconForm, IconPlus } from '@/components/ui/icons';
 import { FieldCard } from './FieldCard';
-import { PALETTE_ID, clearFieldErrors, fieldElId, omit, type EditorErrors } from './errors';
+import { PALETTE_ID, clearFieldErrors, fieldElId, omit, summaryElId, type EditorErrors } from './errors';
 
 export interface Draft {
   title: string;
@@ -45,6 +46,7 @@ export function BuilderTab({
 }) {
   const { fields } = draft;
   const full = fields.length >= LIMITS.fields;
+  const toast = useToast();
 
   const setFields = (fn: (fields: Field[]) => Field[]) => setDraft((d) => ({ ...d, fields: fn(d.fields) }));
 
@@ -93,10 +95,33 @@ export function BuilderTab({
     requestFocus(fieldElId(copy.id, 'label'), true);
   }
 
-  function remove(id: string) {
-    setFields((list) => list.filter((f) => f.id !== id));
-    setErrors((e) => ({ ...e, byField: omit(e.byField, id) }));
-    if (selectedId === id) setSelectedId(null);
+  function remove(index: number) {
+    const removed = fields[index];
+    if (!removed) return;
+    setFields((list) => list.filter((f) => f.id !== removed.id));
+    setErrors((e) => ({ ...e, byField: omit(e.byField, removed.id) }));
+    if (selectedId === removed.id) setSelectedId(null);
+
+    // Keep keyboard focus in the list: the next question, else the previous one, else the palette.
+    const rest = fields.filter((f) => f.id !== removed.id);
+    const neighbor = rest[index] ?? rest[index - 1];
+    if (!neighbor) requestFocus(PALETTE_ID);
+    else if (neighbor.id === selectedId) requestFocus(fieldElId(neighbor.id, 'label'));
+    else requestFocus(summaryElId(neighbor.id));
+
+    const title = removed.label.trim() ? `«${removed.label.trim()}»` : 'без текста';
+    toast.info(`Вопрос ${title} удалён`, {
+      label: 'Отменить',
+      onClick: () => {
+        setFields((list) => {
+          if (list.some((f) => f.id === removed.id) || list.length >= LIMITS.fields) return list;
+          const at = Math.min(index, list.length);
+          return [...list.slice(0, at), removed, ...list.slice(at)];
+        });
+        setSelectedId(removed.id);
+        requestFocus(fieldElId(removed.id, 'label'));
+      },
+    });
   }
 
   return (
@@ -202,7 +227,7 @@ export function BuilderTab({
                   onChange={(patch) => update(f.id, patch)}
                   onMove={(dir) => move(i, dir)}
                   onDuplicate={() => duplicate(i)}
-                  onDelete={() => remove(f.id)}
+                  onDelete={() => remove(i)}
                   requestFocus={requestFocus}
                   canDuplicate={!full}
                 />

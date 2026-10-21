@@ -70,6 +70,8 @@ export const hasFieldErrors = (fe: FieldErrors | undefined) => Boolean(fe && cou
 export const fieldElId = (fieldId: string, prop: FieldProp) => `fe-${fieldId}-${prop}`;
 export const optElId = (fieldId: string, optId: string) => `fe-${fieldId}-opt-${optId}`;
 export const PALETTE_ID = 'add-field-palette';
+/** The collapsed card's summary button. */
+export const summaryElId = (fieldId: string) => `fe-${fieldId}-summary`;
 
 /** The element to focus for the first error, in on-screen order. */
 export function firstErrorTarget(e: EditorErrors, fields: Field[]): { elId: string; fieldId?: string } | null {

@@ -54,6 +54,7 @@ export function PreviewTab({ draft }: { draft: Draft }) {
               submittedAt={doneAt}
               note="Это предпросмотр — ответ не сохранён."
               againLabel="Заполнить заново"
+              headingLevel="h2"
               onAgain={() => {
                 setDoneAt(null);
                 setRound((r) => r + 1);

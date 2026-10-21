@@ -131,9 +131,9 @@ export function FormRenderer({
   const errorCount = errorOrder.length + otherErrors.length;
 
   return (
-    <div className="overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm">
+    <div className="@container overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm">
       <div className="h-1.5 bg-gradient-to-r from-indigo-500 via-violet-500 to-indigo-400" aria-hidden="true" />
-      <div className="px-5 py-6 sm:px-8 sm:py-8">
+      <div className="px-5 py-6 @lg:px-8 @lg:py-8">
         {mode === 'preview' ? (
           <p className="mb-5 flex items-center gap-2 rounded-lg bg-amber-50 px-3 py-2 text-sm font-medium text-amber-900 ring-1 ring-amber-200">
             <IconInfo size={16} className="shrink-0" />
@@ -141,7 +141,7 @@ export function FormRenderer({
           </p>
         ) : null}
 
-        <Heading className="text-2xl font-semibold leading-tight tracking-tight text-slate-900 sm:text-[1.75rem]">
+        <Heading className="text-2xl font-semibold leading-tight tracking-tight text-slate-900 @lg:text-[1.75rem]">
           {form.title || 'Без названия'}
         </Heading>
         {form.description ? (
@@ -222,7 +222,7 @@ export function FormRenderer({
               className={
                 'inline-flex min-h-12 w-full items-center justify-center gap-2 rounded-xl bg-accent px-6 text-base font-semibold text-white shadow-sm ' +
                 'transition-colors hover:bg-accent-strong focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent focus-visible:ring-offset-2 ' +
-                'disabled:cursor-not-allowed disabled:opacity-60 sm:w-auto'
+                'disabled:cursor-not-allowed disabled:opacity-60 @lg:w-auto'
               }
             >
               {submitting ? (
@@ -241,7 +241,7 @@ export function FormRenderer({
 }
 
 const controlCls = (invalid: boolean) =>
-  'block w-full min-h-12 rounded-xl border bg-white px-4 py-3 text-base leading-normal text-slate-900 placeholder:text-slate-400 ' +
+  'block w-full min-h-12 rounded-xl border bg-white px-4 py-3 text-base leading-normal text-slate-900 placeholder:text-slate-500 ' +
   'transition-colors focus:outline-none focus-visible:ring-4 ' +
   (invalid
     ? 'border-red-500 focus-visible:ring-red-500/20'

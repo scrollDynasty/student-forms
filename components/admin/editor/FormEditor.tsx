@@ -2,7 +2,7 @@
 
 import Link from 'next/link';
 import { usePathname, useSearchParams } from 'next/navigation';
-import { useCallback, useEffect, useEffectEvent, useMemo, useRef, useState, type KeyboardEvent as ReactKeyboardEvent } from 'react';
+import { useCallback, useEffect, useEffectEvent, useMemo, useRef, useState, type KeyboardEvent as ReactKeyboardEvent, type SetStateAction } from 'react';
 import { normalizeFormInput, type Field } from '@/lib/schema';
 import { api, isApiError, type FormDto } from '@/lib/api-client';
 import { Button, buttonClasses } from '@/components/ui/Button';
@@ -115,6 +115,10 @@ export function FormEditor({ formId }: { formId: string }) {
     guard.setDirty(dirty);
   }, [dirty, guard]);
   useEffect(() => () => guard.setDirty(false), [guard]);
+  // Let the guard know which history entry is "the editor" (tab switches create new entries).
+  useEffect(() => {
+    guard.syncEntry();
+  }, [searchParams, guard]);
 
   useEffect(() => {
     if (!dirty) return;
@@ -133,16 +137,29 @@ export function FormEditor({ formId }: { formId: string }) {
 
   useEffect(() => {
     if (!focusReq) return;
-    const raf = requestAnimationFrame(() => {
+    // The target may appear a few frames later (e.g. after switching to the builder tab), so retry briefly.
+    let raf = 0;
+    let attempts = 0;
+    const tryFocus = () => {
       const el = document.getElementById(focusReq.elId);
-      if (!el) return;
+      if (!el) {
+        if (++attempts < 30) raf = requestAnimationFrame(tryFocus);
+        return;
+      }
       const smooth = !window.matchMedia('(prefers-reduced-motion: reduce)').matches;
       el.scrollIntoView({ block: 'center', behavior: smooth ? 'smooth' : 'auto' });
       el.focus({ preventScroll: true });
       if (focusReq.select && el instanceof HTMLInputElement) el.select();
-    });
+    };
+    raf = requestAnimationFrame(tryFocus);
     return () => cancelAnimationFrame(raf);
   }, [focusReq]);
+
+  // Any edit makes form-level server messages that are not tied to a field stale.
+  const editDraft = useCallback((update: SetStateAction<Draft>) => {
+    setDraft(update);
+    setErrors((e) => (e.other.length > 0 ? { ...e, other: [] } : e));
+  }, []);
 
   // ---- tabs (kept in ?tab= so deep links and the back button work) ---------------------------
   const setTab = useCallback(
@@ -227,6 +244,7 @@ export function FormEditor({ formId }: { formId: string }) {
       const form = await api.publishForm(saved.id);
       setSaved(form);
       toast.success('Форма опубликована');
+      requestFocus('unpublish-button');
     } catch (e) {
       handleMutationError(e, draft.fields, 'опубликовать форму');
     } finally {
@@ -244,6 +262,7 @@ export function FormEditor({ formId }: { formId: string }) {
       setSaved(form);
       setConfirmUnpublish(false);
       toast.success('Публикация снята');
+      requestFocus('publish-button');
     } catch (e) {
       setConfirmUnpublish(false);
       handleMutationError(e, draft.fields, 'снять форму с публикации');
@@ -386,11 +405,12 @@ export function FormEditor({ formId }: { formId: string }) {
                 {busy === 'save' ? 'Сохранение…' : 'Сохранить'}
               </Button>
               {published ? (
-                <Button onClick={() => setConfirmUnpublish(true)} disabled={busy !== null}>
+                <Button id="unpublish-button" onClick={() => setConfirmUnpublish(true)} disabled={busy !== null}>
                   Снять с публикации
                 </Button>
               ) : (
                 <Button
+                  id="publish-button"
                   variant="primary"
                   onClick={() => void publish()}
                   disabled={busy !== null}
@@ -412,7 +432,7 @@ export function FormEditor({ formId }: { formId: string }) {
                   type="button"
                   role="tab"
                   aria-selected={active}
-                  aria-controls={`panel-${t.id}`}
+                  aria-controls={active ? `panel-${t.id}` : undefined}
                   tabIndex={active ? 0 : -1}
                   onClick={() => setTab(t.id)}
                   className={
@@ -480,7 +500,7 @@ export function FormEditor({ formId }: { formId: string }) {
 
         {!published && tab === 'builder' && draft.fields.length > 0 && errorCount === 0 ? (
           <p className="flex items-center gap-2 text-sm text-slate-600">
-            <IconAlert size={16} className="shrink-0 text-slate-400" />
+            <IconAlert size={16} className="shrink-0 text-slate-500" />
             Форма в черновике: студенты не увидят её, пока вы не нажмёте «Опубликовать».
           </p>
         ) : null}
@@ -489,7 +509,7 @@ export function FormEditor({ formId }: { formId: string }) {
           {tab === 'builder' ? (
             <BuilderTab
               draft={draft}
-              setDraft={setDraft}
+              setDraft={editDraft}
               errors={errors}
               setErrors={setErrors}
               selectedId={selectedId}

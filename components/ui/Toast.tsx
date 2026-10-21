@@ -4,16 +4,22 @@ import { createContext, useCallback, useContext, useEffect, useMemo, useRef, use
 import { IconAlert, IconCheck, IconX } from './icons';
 
 type ToastTone = 'success' | 'error' | 'info';
+export interface ToastAction {
+  label: string;
+  onClick: () => void;
+}
+
 interface ToastItem {
   id: number;
   tone: ToastTone;
   message: string;
+  action?: ToastAction;
 }
 
 interface ToastApi {
-  success: (message: string) => void;
-  error: (message: string) => void;
-  info: (message: string) => void;
+  success: (message: string, action?: ToastAction) => void;
+  error: (message: string, action?: ToastAction) => void;
+  info: (message: string, action?: ToastAction) => void;
 }
 
 const ToastContext = createContext<ToastApi | null>(null);
@@ -37,12 +43,13 @@ export function ToastProvider({ children }: { children: ReactNode }) {
   }, []);
 
   const push = useCallback(
-    (tone: ToastTone, message: string) => {
+    (tone: ToastTone, message: string, action?: ToastAction) => {
       const id = nextId.current++;
-      setItems((list) => [...list.slice(-3), { id, tone, message }]);
+      setItems((list) => [...list.slice(-3), { id, tone, message, action }]);
+      // Toasts with an action (e.g. «Отменить») stay longer so there is time to use it.
       timers.current.set(
         id,
-        setTimeout(() => dismiss(id), tone === 'error' ? 7000 : 3500),
+        setTimeout(() => dismiss(id), tone === 'error' || action ? 8000 : 3500),
       );
     },
     [dismiss],
@@ -58,9 +65,9 @@ export function ToastProvider({ children }: { children: ReactNode }) {
 
   const api = useMemo<ToastApi>(
     () => ({
-      success: (m) => push('success', m),
-      error: (m) => push('error', m),
-      info: (m) => push('info', m),
+      success: (m, a) => push('success', m, a),
+      error: (m, a) => push('error', m, a),
+      info: (m, a) => push('info', m, a),
     }),
     [push],
   );
@@ -86,6 +93,18 @@ export function ToastProvider({ children }: { children: ReactNode }) {
               {t.tone === 'error' ? <IconAlert size={16} /> : <IconCheck size={16} className={t.tone === 'success' ? 'text-emerald-300' : ''} />}
             </span>
             <p className="min-w-0 flex-1 leading-snug">{t.message}</p>
+            {t.action ? (
+              <button
+                type="button"
+                onClick={() => {
+                  dismiss(t.id);
+                  t.action?.onClick();
+                }}
+                className="-my-1 shrink-0 rounded px-2 py-1 font-semibold text-indigo-200 underline-offset-2 hover:text-white hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white"
+              >
+                {t.action.label}
+              </button>
+            ) : null}
             <button
               type="button"
               onClick={() => dismiss(t.id)}

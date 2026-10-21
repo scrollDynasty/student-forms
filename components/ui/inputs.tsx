@@ -2,7 +2,7 @@ import type { ComponentProps, ReactNode } from 'react';
 
 export function inputClasses(invalid = false, extra = '') {
   return (
-    'block w-full rounded-lg border bg-white px-3 py-2.5 text-base text-slate-900 shadow-xs placeholder:text-slate-400 ' +
+    'block w-full rounded-lg border bg-white px-3 py-2.5 text-base text-slate-900 shadow-xs placeholder:text-slate-500 ' +
     'transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-offset-0 sm:text-sm ' +
     (invalid
       ? 'border-red-500 focus-visible:border-red-500 focus-visible:ring-red-500/30'

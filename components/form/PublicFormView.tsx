@@ -37,7 +37,7 @@ export function PublicFormView({ publicId }: { publicId: string }) {
   const [state, setState] = useState<PageState>({ status: 'loading' });
   const [reloadKey, setReloadKey] = useState(0);
   const [success, setSuccess] = useState<string | null>(null);
-  const [formChanged, setFormChanged] = useState(false);
+  const [formChanged, setFormChanged] = useState(0); // number of FORM_CHANGED refreshes, 0 = none
   const [round, setRound] = useState(0);
 
   // Analytics session (one per form per browser tab, survives reloads via sessionStorage).
@@ -85,9 +85,10 @@ export function PublicFormView({ publicId }: { publicId: string }) {
     if (formTitle) document.title = formTitle;
   }, [formTitle]);
 
-  // After a 409 FORM_CHANGED the re-rendered form shows a notice: move focus there so it is seen and announced.
+  // After a 409 FORM_CHANGED the re-rendered form shows a notice: move focus there so it is seen and announced
+  // (the counter re-runs this on every repeated change).
   useEffect(() => {
-    if (!formChanged) return;
+    if (formChanged === 0) return;
     const el = document.getElementById('form-changed-notice');
     if (!el) return;
     el.scrollIntoView({ block: 'center', behavior: window.matchMedia('(prefers-reduced-motion: reduce)').matches ? 'auto' : 'smooth' });
@@ -129,7 +130,7 @@ export function PublicFormView({ publicId }: { publicId: string }) {
       submissionIdRef.current = null;
       writeStored(sessionKey(publicId), null);
       sessionRef.current = null;
-      setFormChanged(false);
+      setFormChanged(0);
       setSuccess(res.submittedAt);
       return { ok: true };
     } catch (e) {
@@ -152,7 +153,7 @@ export function PublicFormView({ publicId }: { publicId: string }) {
         const fresh = changedFormFrom(e);
         if (fresh) {
           setState({ status: 'ready', form: fresh });
-          setFormChanged(true);
+          setFormChanged((n) => n + 1);
           return { ok: false };
         }
         return { ok: false, message: 'Форма была обновлена. Обновите страницу и проверьте ответы.' };
@@ -225,8 +226,8 @@ export function PublicFormView({ publicId }: { publicId: string }) {
             onSubmit={submit}
             onFieldChange={onFieldChange}
             notice={
-              formChanged ? (
-                <div id="form-changed-notice" tabIndex={-1} className="rounded-xl focus:outline-none">
+              formChanged > 0 ? (
+                <div key={formChanged} id="form-changed-notice" tabIndex={-1} className="rounded-xl focus:outline-none">
                   <Alert tone="warning" role="alert" title="Форма была обновлена, проверьте ответы">
                     Организатор изменил вопросы, пока вы заполняли форму. Ваши ответы на сохранившиеся вопросы остались на месте.
                   </Alert>
@@ -236,7 +237,7 @@ export function PublicFormView({ publicId }: { publicId: string }) {
           />
         ) : null}
 
-        <p className="mt-8 text-center text-xs text-slate-400">Формы откликов · карьерная платформа для студентов</p>
+        <p className="mt-8 text-center text-xs text-slate-500">Формы откликов · карьерная платформа для студентов</p>
       </main>
     </div>
   );

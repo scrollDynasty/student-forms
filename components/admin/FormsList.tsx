@@ -109,7 +109,7 @@ export function FormsList() {
                   </span>
                   {step}
                   {i < FLOW.length - 1 ? (
-                    <span aria-hidden="true" className="text-slate-400">
+                    <span aria-hidden="true" className="text-slate-500">
                       →
                     </span>
                   ) : null}

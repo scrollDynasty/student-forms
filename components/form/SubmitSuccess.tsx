@@ -10,28 +10,32 @@ export function SubmitSuccess({
   note,
   againLabel = 'Отправить ещё один ответ',
   onAgain,
+  headingLevel = 'h1',
 }: {
   title: string;
   submittedAt: string;
   note?: string;
   againLabel?: string;
   onAgain: () => void;
+  /** h1 on the public page (it is the page's main heading), h2 inside the admin preview. */
+  headingLevel?: 'h1' | 'h2';
 }) {
+  const Heading = headingLevel;
   const headingRef = useRef<HTMLHeadingElement>(null);
   useEffect(() => {
     headingRef.current?.focus();
   }, []);
 
   return (
-    <div className="overflow-hidden rounded-2xl border border-slate-200 bg-white text-center shadow-sm">
+    <div className="@container overflow-hidden rounded-2xl border border-slate-200 bg-white text-center shadow-sm">
       <div className="h-1.5 bg-gradient-to-r from-emerald-400 via-teal-400 to-emerald-500" aria-hidden="true" />
-      <div className="px-6 py-12 sm:px-10">
+      <div className="px-6 py-12 @lg:px-10">
         <div className="mx-auto flex size-14 items-center justify-center rounded-full bg-emerald-50 text-emerald-600 ring-8 ring-emerald-50/50">
           <IconCheck size={28} />
         </div>
-        <h2 ref={headingRef} tabIndex={-1} className="mt-6 text-2xl font-semibold tracking-tight text-slate-900 focus:outline-none">
+        <Heading ref={headingRef} tabIndex={-1} className="mt-6 text-2xl font-semibold tracking-tight text-slate-900 focus:outline-none">
           Спасибо! Ваш ответ отправлен
-        </h2>
+        </Heading>
         <p className="mt-3 text-base leading-relaxed text-slate-600">
           Форма «{title}» · {formatDateTime(submittedAt)}
         </p>
