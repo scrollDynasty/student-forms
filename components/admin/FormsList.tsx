@@ -126,7 +126,7 @@ export function FormsList() {
 
         {state.status === 'ready' && state.forms.length === 0 ? (
           <EmptyState icon={<IconForm size={24} />} title="Здесь появятся ваши формы" action={createButton}>
-            <ol className="mt-1 flex flex-wrap items-center gap-x-2 gap-y-2">
+            <ol className="mt-1 flex flex-wrap items-center gap-x-2 gap-y-2 lg:w-max">
               {FLOW.map((step, i) => (
                 <li key={step} className="flex items-center gap-2">
                   <span className="flex size-6 items-center justify-center rounded-full bg-accent-100 text-xs font-semibold text-accent-800">
