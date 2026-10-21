@@ -25,6 +25,17 @@ export function nextOptionLabel(options: Option[]): string {
   return `Вариант ${n}`;
 }
 
+/**
+ * Min/max from a number input. Text the browser can't parse ("1-2") reads as value "", which would
+ * silently mean "no limit"; it becomes NaN instead, so the form check before saving reports it.
+ */
+function limitFromInput(el: HTMLInputElement): number | null {
+  if (el.validity.badInput) return NaN;
+  if (el.value === '') return null;
+  const n = Number(el.value);
+  return Number.isFinite(n) ? n : NaN;
+}
+
 function TypeIcon({ type, active = false }: { type: FieldType; active?: boolean }) {
   return (
     <span
@@ -281,13 +292,15 @@ export function FieldCard({
                   type="number"
                   inputMode="decimal"
                   step="any"
-                  value={field[p] ?? ''}
+                  // NaN marks text the browser can't parse: render it as '' so React leaves the typed text alone.
+                  value={field[p] === null || Number.isNaN(field[p]) ? '' : field[p]}
                   invalid={Boolean(errors?.[p])}
                   aria-describedby={describe(p)}
-                  onChange={(e) => {
-                    const raw = e.target.value;
-                    const n = raw === '' ? null : Number(raw);
-                    onChange({ [p]: n === null || Number.isFinite(n) ? n : null });
+                  onChange={(e) => onChange({ [p]: limitFromInput(e.target) })}
+                  // "input" also fires when the value stays "" ("1-" → "1-2"), which onChange skips.
+                  onInput={(e) => {
+                    const next = limitFromInput(e.currentTarget);
+                    if (!Object.is(next, field[p])) onChange({ [p]: next });
                   }}
                   className="text-[15px]"
                 />

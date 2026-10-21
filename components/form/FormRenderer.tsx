@@ -1,6 +1,6 @@
 'use client';
 
-import { useRef, useState, type FormEvent, type ReactNode } from 'react';
+import { useRef, useState, type FormEvent, type ReactNode, type SyntheticEvent } from 'react';
 import { LIMITS, isChoiceType, validateAnswers, type Answers, type ErrorMap, type Field } from '@/lib/schema';
 import { buttonClasses } from '@/components/ui/Button';
 import { Spinner } from '@/components/ui/feedback';
@@ -64,6 +64,35 @@ export function sanitizeAnswers(raw: unknown, fields: Field[]): DraftAnswers {
 
 const hasErrors = (e: ErrorMap) => Object.keys(e).length > 0;
 
+// <input type="number"> and <input type="date"> report value "" for text they can't parse ("1-2", a date
+// with only the day typed), so without this check such an answer would be sent as empty.
+const UNPARSED_MESSAGES: Partial<Record<Field['type'], string>> = {
+  number: 'Введите число',
+  date: 'Введите дату полностью',
+};
+
+/** Errors for fields whose control holds unparsable text; they win over errors computed from the value. */
+function withUnparsed(errors: ErrorMap, fields: Field[], unparsed: ReadonlySet<string>): ErrorMap {
+  if (unparsed.size === 0) return errors;
+  const out = { ...errors };
+  for (const f of fields) {
+    const message = UNPARSED_MESSAGES[f.type];
+    if (message && unparsed.has(f.id)) out[f.id] = message;
+  }
+  return out;
+}
+
+/** Reads the controls themselves: a partly typed date changes no value, so no change event reports it. */
+function unparsedFieldIds(form: HTMLFormElement, fields: Field[]): Set<string> {
+  const ids = new Set<string>();
+  for (const f of fields) {
+    if (!UNPARSED_MESSAGES[f.type]) continue;
+    const el = form.querySelector<HTMLInputElement>(`#${CSS.escape(controlId(f.id))}`);
+    if (el?.validity.badInput) ids.add(f.id);
+  }
+  return ids;
+}
+
 function focusControl(fieldId: string) {
   const el = document.getElementById(controlId(fieldId));
   if (!el) return;
@@ -99,6 +128,8 @@ export function FormRenderer({
   const [submitting, setSubmitting] = useState(false);
   const [submitError, setSubmitError] = useState<string | null>(null);
   const submittingRef = useRef(false);
+  /** Fields whose number/date control currently holds text the browser can't parse. */
+  const [unparsed, setUnparsed] = useState<ReadonlySet<string>>(() => new Set());
 
   // When the form definition changes (e.g. 409 FORM_CHANGED), keep answers for fields that still exist.
   const [prevFields, setPrevFields] = useState(fields);
@@ -108,9 +139,20 @@ export function FormRenderer({
     setErrors({});
   }
 
-  const errorOrder = fields.filter((f) => errors[f.id]);
+  const shownErrors = attempted ? withUnparsed(errors, fields, unparsed) : errors;
+  const errorOrder = fields.filter((f) => shownErrors[f.id]);
   // Errors keyed by something other than a known field id (rare server-side keys) are shown in the summary only.
-  const otherErrors = Object.entries(errors).filter(([k]) => !fields.some((f) => f.id === k));
+  const otherErrors = Object.entries(shownErrors).filter(([k]) => !fields.some((f) => f.id === k));
+
+  function markUnparsed(fieldId: string, bad: boolean) {
+    setUnparsed((prev) => {
+      if (prev.has(fieldId) === bad) return prev;
+      const next = new Set(prev);
+      if (bad) next.add(fieldId);
+      else next.delete(fieldId);
+      return next;
+    });
+  }
 
   function revalidate(next: DraftAnswers) {
     setErrors(validateAnswers(fields, next).errors);
@@ -133,8 +175,11 @@ export function FormRenderer({
     if (submittingRef.current) return;
     setAttempted(true);
     setSubmitError(null);
-    const { values, errors: found } = validateAnswers(fields, answers);
-    setErrors(found);
+    const bad = unparsedFieldIds(e.currentTarget, fields);
+    setUnparsed(bad);
+    const { values, errors: valueErrors } = validateAnswers(fields, answers);
+    setErrors(valueErrors);
+    const found = withUnparsed(valueErrors, fields, bad);
     if (hasErrors(found)) {
       const first = fields.find((f) => found[f.id]);
       if (first) requestAnimationFrame(() => focusControl(first.id));
@@ -213,7 +258,7 @@ export function FormRenderer({
                     >
                       {f.label || 'Вопрос'}
                     </a>
-                    : {errors[f.id]}
+                    : {shownErrors[f.id]}
                   </li>
                 ))}
                 {otherErrors.map(([k, msg]) => (
@@ -233,9 +278,10 @@ export function FormRenderer({
                 key={field.id}
                 field={field}
                 value={answers[field.id]}
-                error={errors[field.id]}
+                error={shownErrors[field.id]}
                 onChange={(v) => change(field, v)}
                 onBlur={blur}
+                onUnparsedChange={(bad) => markUnparsed(field.id, bad)}
               />
             ))
           )}
@@ -307,12 +353,15 @@ function FieldControl({
   error,
   onChange,
   onBlur,
+  onUnparsedChange,
 }: {
   field: Field;
   value: DraftValue | undefined;
   error?: string;
   onChange: (v: DraftValue) => void;
   onBlur: () => void;
+  /** Number and date controls: whether the control holds text the browser can't parse. */
+  onUnparsedChange: (bad: boolean) => void;
 }) {
   const id = controlId(field.id);
   const hintId = `${id}-hint`;
@@ -340,6 +389,15 @@ function FieldControl({
     'aria-describedby': describedBy,
     'aria-required': field.required || undefined,
     onBlur,
+  };
+  // For number and date inputs; "input" fires even when the value stays "" (e.g. "1-" → "1-2").
+  const reportUnparsed = (e: SyntheticEvent<HTMLInputElement>) => onUnparsedChange(e.currentTarget.validity.badInput);
+  const parseChecks = {
+    onInput: reportUnparsed,
+    onBlur: (e: SyntheticEvent<HTMLInputElement>) => {
+      reportUnparsed(e);
+      onBlur();
+    },
   };
 
   if (field.type === 'radio' || field.type === 'multi_select') {
@@ -472,6 +530,7 @@ function FieldControl({
       control = (
         <input
           {...common}
+          {...parseChecks}
           type="number"
           inputMode="decimal"
           step="any"
@@ -488,6 +547,7 @@ function FieldControl({
       control = (
         <input
           {...common}
+          {...parseChecks}
           type="date"
           min="1900-01-01"
           max="2100-12-31"

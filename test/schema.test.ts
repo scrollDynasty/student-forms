@@ -234,6 +234,12 @@ describe('hardening', () => {
     assert.ok(norm({ title: 'T', fields: [field({ type: 'number', min: '9'.repeat(400) })] }).errors['fields.0.min']);
   });
 
+  test('a NaN min/max (the builder marks unparsable input that way) is an error, not "no limit"', () => {
+    const { errors } = norm({ title: 'T', fields: [field({ type: 'number', min: NaN, max: NaN })] });
+    assert.equal(errors['fields.0.min'], 'Минимум должен быть числом');
+    assert.equal(errors['fields.0.max'], 'Максимум должен быть числом');
+  });
+
   test('accepts every number format <input type="number"> can produce', () => {
     const fields = [field({ id: 'n', type: 'number' })];
     const value = (raw: string) => validateAnswers(fields, { n: raw }).values.n;

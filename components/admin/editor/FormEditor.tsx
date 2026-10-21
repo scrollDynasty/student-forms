@@ -36,12 +36,17 @@ type Busy = null | 'save' | 'publish' | 'unpublish' | 'reload';
 
 const contentOf = (f: FormDto): Draft => ({ title: f.title, description: f.description, fields: f.fields });
 
+// The builder keeps an unparsable min/max as NaN (see FieldCard), which JSON would turn into null.
+const limitKey = (v: number | null) => (v === null || Number.isFinite(v) ? v : 'invalid');
+
 /** Order-stable serialization used to detect unsaved changes. */
 function serialize(d: Draft): string {
   return JSON.stringify([
     d.title,
     d.description,
-    d.fields.map((f: Field) => [f.id, f.type, f.label, f.hint, f.placeholder, f.required, f.options.map((o) => [o.id, o.label]), f.min, f.max]),
+    d.fields.map((f: Field) => [
+      f.id, f.type, f.label, f.hint, f.placeholder, f.required, f.options.map((o) => [o.id, o.label]), limitKey(f.min), limitKey(f.max),
+    ]),
   ]);
 }
 
@@ -137,6 +142,12 @@ export function FormEditor({ formId }: { formId: string }) {
   useEffect(() => {
     guard.syncEntry();
   }, [searchParams, guard]);
+
+  // The page metadata can't know the form, so name the browser tab here (like the public form does).
+  const savedTitle = saved?.title;
+  useEffect(() => {
+    if (savedTitle) document.title = `${savedTitle} · Редактор формы · Формы откликов`;
+  }, [savedTitle, searchParams]);
 
   useEffect(() => {
     if (!dirty) return;
