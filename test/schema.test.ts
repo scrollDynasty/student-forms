@@ -233,6 +233,30 @@ describe('hardening', () => {
     assert.ok(validateAnswers(fields, { n: '9'.repeat(400) }).errors.n);
     assert.ok(norm({ title: 'T', fields: [field({ type: 'number', min: '9'.repeat(400) })] }).errors['fields.0.min']);
   });
+
+  test('accepts every number format <input type="number"> can produce', () => {
+    const fields = [field({ id: 'n', type: 'number' })];
+    const value = (raw: string) => validateAnswers(fields, { n: raw }).values.n;
+    assert.equal(value('1e3'), 1000);
+    assert.equal(value('-2.5E-1'), -0.25);
+    assert.equal(value('.5'), 0.5);
+    assert.equal(value('1,5'), 1.5);
+    assert.equal(value(' 1e3 '), 1000);
+    assert.equal(value('1e-7'), 1e-7);
+    for (const bad of ['0x10', '1e', 'Infinity', '1.2.3', '--1']) {
+      assert.equal(validateAnswers(fields, { n: bad }).errors.n, 'Введите число', bad);
+    }
+  });
+
+  test('rejects numbers with more digits than a double keeps instead of silently rounding them', () => {
+    const fields = [field({ id: 'n', type: 'number' })];
+    assert.ok(validateAnswers(fields, { n: '12345678901234567890' }).errors.n);
+    assert.ok(validateAnswers(fields, { n: '0.12345678901234567' }).errors.n);
+    assert.equal(validateAnswers(fields, { n: '123456789012345' }).values.n, 123456789012345);
+    // Trailing zeros of an integer are exact in a double, so they don't count.
+    assert.equal(validateAnswers(fields, { n: '1234567890123450000' }).values.n, 1234567890123450000);
+    assert.equal(validateAnswers(fields, { n: '0.000001' }).values.n, 0.000001);
+  });
 });
 
 describe('isAllowedHost (DNS-rebinding guard)', async () => {
@@ -245,5 +269,25 @@ describe('isAllowedHost (DNS-rebinding guard)', async () => {
       assert.equal(isAllowedHost(h, ''), false, String(h));
     }
     assert.equal(isAllowedHost('forms.example.org', ' forms.example.org , other.org'), true);
+  });
+
+  test('rejects Host values that are not a plain host[:port] (userinfo, paths, queries)', () => {
+    for (const h of ['evil.example@127.0.0.1', 'evil.example@localhost:3000', '127.0.0.1/evil', 'localhost?x', 'local host']) {
+      assert.equal(isAllowedHost(h, ''), false, h);
+    }
+  });
+});
+
+describe('rateLimit', async () => {
+  const { rateLimit } = await import('../lib/server/http');
+  const req = (ip: string) => new Request('http://localhost/', { headers: { 'x-forwarded-for': ip } });
+
+  test('a flood of other clients cannot evict a scope counter and reset its limit', () => {
+    const scope = `victim-${Math.random()}`;
+    rateLimit(req('10.0.0.1'), scope, 100, 2);
+    rateLimit(req('10.0.0.2'), scope, 100, 2);
+    // Spoofed X-Forwarded-For values create one bucket each.
+    for (let i = 0; i < 25_000; i++) rateLimit(req(`spoofed-${i}`), `flood-${scope}`, 100, 1_000_000);
+    assert.throws(() => rateLimit(req('10.0.0.3'), scope, 100, 2), { code: 'RATE_LIMITED' });
   });
 });

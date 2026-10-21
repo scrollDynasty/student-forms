@@ -188,7 +188,7 @@ export function FormRenderer({
 
         {notice ? <div className="mt-6">{notice}</div> : null}
 
-        <form noValidate onSubmit={submit} className="mt-9 grid gap-[30px]" aria-label={form.title || 'Форма'}>
+        <form noValidate onSubmit={submit} className="mt-9 grid grid-cols-1 gap-[30px]" aria-label={form.title || 'Форма'}>
           {/* Only the count is a live region, so fixing answers doesn't re-read the whole list on every keystroke. */}
           <div className={showSummary ? 'rounded-[24px] bg-accent-100 px-5 py-4 text-sm text-accent-900 ring-1 ring-inset ring-accent-300' : 'contents'}>
             <p aria-live="polite" className={showSummary ? 'flex items-center gap-2 font-semibold' : 'sr-only'}>
@@ -347,13 +347,13 @@ function FieldControl({
     const selected = Array.isArray(value) ? value : [];
     return (
       <fieldset aria-describedby={describedBy} className="m-0 min-w-0 border-0 p-0">
-        <legend className="p-0 text-base font-semibold leading-[1.35]">
+        <legend className="w-full p-0 text-base font-semibold leading-[1.35]">
           {label}
           <RequiredMark required={field.required} />
         </legend>
         {hint}
         {multi ? <p className="sr-only">Можно выбрать несколько вариантов</p> : null}
-        <div className="mt-3 grid gap-2">
+        <div className="mt-3 grid grid-cols-1 gap-2">
           {field.options.map((opt, i) => {
             const checked = multi ? selected.includes(opt.id) : value === opt.id;
             return (

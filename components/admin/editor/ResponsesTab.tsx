@@ -92,7 +92,7 @@ export function ResponsesTab({
     );
   }
 
-  const th = 'px-3 py-3.5 text-left text-[11px] font-medium uppercase tracking-[0.08em] text-ink/60 border-b border-divider';
+  const th = 'px-3 py-3.5 text-left text-[11px] font-medium uppercase tracking-[0.08em] text-neutral-700 border-b border-divider';
   return (
     <div>
       {toolbar}

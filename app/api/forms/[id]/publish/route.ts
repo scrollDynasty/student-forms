@@ -1,4 +1,4 @@
-import { setPublished } from '@/lib/server/forms';
+import { getForm, setPublished } from '@/lib/server/forms';
 import { assertSameOrigin, handle, json, readOptionalJsonObject } from '@/lib/server/http';
 import { getStore } from '@/lib/server/store';
 
@@ -6,8 +6,10 @@ export function POST(request: Request, ctx: RouteContext<'/api/forms/[id]/publis
   return handle(async () => {
     assertSameOrigin(request);
     const { id } = await ctx.params;
+    const store = await getStore();
+    getForm(store, id); // 404 before body validation
     const { version } = await readOptionalJsonObject(request);
-    const form = await setPublished(await getStore(), id, true, version);
+    const form = await setPublished(store, id, true, version);
     return json({ form });
   });
 }

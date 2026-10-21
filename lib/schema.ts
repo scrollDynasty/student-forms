@@ -88,7 +88,10 @@ const RESERVED_IDS = new Set(['__proto__', 'constructor', 'prototype']);
 const EMAIL_RE = /^[^\s@]+@[^\s@.]+(\.[^\s@.]+)*\.[^\s@.]{2,}$/;
 const PHONE_RE = /^\+?[\d\s()-]+$/;
 const DATE_RE = /^(\d{4})-(\d{2})-(\d{2})$/;
-const NUMERIC_RE = /^-?\d+([.,]\d+)?$/;
+// Everything <input type="number"> can produce ("1e3", ".5"), plus a decimal comma typed into a text field.
+const NUMERIC_RE = /^-?(\d+([.,]\d+)?|[.,]\d+)([eE][-+]?\d+)?$/;
+/** A double keeps about 15 significant decimal digits; longer input would be stored silently rounded. */
+const MAX_SIGNIFICANT_DIGITS = 15;
 export const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 const isValidId = (v: unknown): v is string => typeof v === 'string' && ID_RE.test(v) && !RESERVED_IDS.has(v);
@@ -124,6 +127,12 @@ function toNumberOrNull(v: unknown): number | null {
     return Number.isFinite(n) ? n : NaN;
   }
   return NaN;
+}
+
+function hasTooManyDigits(v: unknown): boolean {
+  if (typeof v !== 'string') return false;
+  const mantissa = v.trim().split(/[eE]/)[0].replace(/\D/g, '');
+  return mantissa.replace(/^0+/, '').replace(/0+$/, '').length > MAX_SIGNIFICANT_DIGITS;
 }
 
 export function createField(type: FieldType = 'short_text'): Field {
@@ -288,6 +297,7 @@ function validateOne(field: Field, raw: unknown): OneResult {
       return { value: v };
     }
     case 'number': {
+      if (hasTooManyDigits(raw)) return { error: `Не больше ${MAX_SIGNIFICANT_DIGITS} значащих цифр` };
       const n = toNumberOrNull(raw);
       if (n === null || Number.isNaN(n)) return { error: 'Введите число' };
       if (field.min !== null && n < field.min) return { error: `Не меньше ${field.min}` };

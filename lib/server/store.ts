@@ -45,13 +45,29 @@ const FILE_NAME = 'db.json';
 const emptyData = (): DbData => ({ forms: [], responses: [], sessions: [] });
 const isObject = (v: unknown): v is Record<string, unknown> => typeof v === 'object' && v !== null && !Array.isArray(v);
 const hasStrings = (v: Record<string, unknown>, keys: string[]) => keys.every((k) => typeof v[k] === 'string');
+/** Fields (and response snapshots of them) are read without further checks: validation, CSV, the form UI. */
+const areFields = (v: unknown) =>
+  Array.isArray(v) &&
+  v.every(
+    (f) =>
+      isObject(f) &&
+      hasStrings(f, ['id', 'type', 'label']) &&
+      Array.isArray(f.options) &&
+      f.options.every((o) => isObject(o) && hasStrings(o, ['id', 'label'])),
+  );
 
 /** Checks every record, so a hand-edited file fails at startup instead of with 500s later. */
 function isValidShape(v: unknown): v is DbData {
   if (!isObject(v) || !Array.isArray(v.forms) || !Array.isArray(v.responses) || !Array.isArray(v.sessions)) return false;
   return (
-    v.forms.every((f) => isObject(f) && hasStrings(f, ['id', 'publicId', 'title', 'status', 'updatedAt']) && Array.isArray(f.fields)) &&
-    v.responses.every((r) => isObject(r) && hasStrings(r, ['id', 'formId', 'submittedAt']) && isObject(r.answers) && Array.isArray(r.fields)) &&
+    v.forms.every(
+      (f) =>
+        isObject(f) &&
+        hasStrings(f, ['id', 'publicId', 'title', 'status', 'updatedAt']) &&
+        Number.isInteger(f.version) &&
+        areFields(f.fields),
+    ) &&
+    v.responses.every((r) => isObject(r) && hasStrings(r, ['id', 'formId', 'submittedAt']) && isObject(r.answers) && areFields(r.fields)) &&
     v.sessions.every((s) => isObject(s) && hasStrings(s, ['id', 'formId']) && Array.isArray(s.fields))
   );
 }
@@ -99,7 +115,8 @@ export class JsonStore {
     if (raw === null) return new JsonStore(dir, emptyData());
 
     try {
-      const parsed: unknown = JSON.parse(raw);
+      // A BOM is what Windows editors add on save; it is not part of the JSON.
+      const parsed: unknown = JSON.parse(raw.replace(/^﻿/, ''));
       if (!isValidShape(parsed)) throw new Error('unexpected structure');
       return new JsonStore(dir, parsed);
     } catch (err) {

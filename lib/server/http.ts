@@ -87,18 +87,22 @@ export function assertSameOrigin(request: Request): void {
   }
 }
 
-const buckets = new Map<string, { count: number; resetAt: number }>();
+type Bucket = { count: number; resetAt: number };
+/** Per-scope counters: scopes are fixed names or existing forms, so live ones are never evicted. */
+const scopeBuckets = new Map<string, Bucket>();
+/** Per-scope-and-client counters: the client part can be spoofed, so this map is capped. */
+const clientBuckets = new Map<string, Bucket>();
 const MAX_BUCKETS = 10_000;
 const WINDOW_MS = 60_000;
 
 /** Counts one hit in a fixed one-minute window; true when the key is over its limit. */
-function hit(key: string, limit: number): boolean {
+function hit(buckets: Map<string, Bucket>, key: string, limit: number, evictLive: boolean): boolean {
   const t = Date.now();
   if (buckets.size >= MAX_BUCKETS) {
     for (const [k, b] of buckets) if (b.resetAt <= t) buckets.delete(k);
-    // Still full (e.g. a flood of spoofed keys): drop the oldest entries to bound memory.
+    // Still full (e.g. a flood of spoofed client keys): drop the oldest entries to bound memory.
     for (const k of buckets.keys()) {
-      if (buckets.size < MAX_BUCKETS * 0.9) break;
+      if (!evictLive || buckets.size < MAX_BUCKETS * 0.9) break;
       buckets.delete(k);
     }
   }
@@ -115,11 +119,12 @@ function hit(key: string, limit: number): boolean {
  * fills X-Forwarded-For with the socket address, but keeps a client-supplied value, so this layer
  * can be dodged by spoofing. `perScope` caps the scope as a whole (e.g. one form) regardless of
  * who asks, which bounds abuse even then. Behind a reverse proxy, it must overwrite X-Forwarded-For.
+ * Callers pass only bounded scopes (fixed names, existing forms), so spoofed keys can't push a live scope out.
  */
 export function rateLimit(request: Request, scope: string, perClient: number, perScope: number): void {
   const client = (request.headers.get('x-forwarded-for')?.split(',')[0]?.trim() || 'unknown').slice(0, 64);
-  const overScope = hit(scope, perScope);
-  const overClient = hit(`${scope}|${client}`, perClient);
+  const overScope = hit(scopeBuckets, scope, perScope, false);
+  const overClient = hit(clientBuckets, `${scope}|${client}`, perClient, true);
   if (overScope || overClient) {
     throw new ApiError(429, 'RATE_LIMITED', 'Слишком много запросов. Попробуйте через минуту.');
   }

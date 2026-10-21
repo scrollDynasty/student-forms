@@ -145,7 +145,7 @@ export function FormsList() {
         ) : null}
 
         {state.status === 'ready' && state.forms.length > 0 ? (
-          <ul className="m-0 grid list-none gap-3 p-0">
+          <ul className="m-0 grid list-none grid-cols-1 gap-3 p-0">
             {state.forms.map((form) => {
               const href = `/admin/forms/${encodeURIComponent(form.id)}`;
               return (

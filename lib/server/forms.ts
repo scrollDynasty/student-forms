@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import {
   UUID_RE,
+  fieldTypeLabel,
   formatValue,
   generateId,
   normalizeFormInput,
@@ -184,26 +185,34 @@ export function responsesCsv(store: JsonStore, id: string) {
   const form = findForm(store.data, id);
   const responses = responsesOf(store.data, id);
 
-  // Current fields first, then fields that only exist in older responses.
-  const columns: { id: string; label: string }[] = form.fields.map((f) => ({ id: f.id, label: f.label }));
-  const known = new Set(columns.map((c) => c.id));
+  // One column per field id and type: the editor keeps the id when a question's type changes, and
+  // answers of the old type must not mix with the new ones. Current fields first, then older ones.
+  const columnKey = (f: Pick<Field, 'id' | 'type'>) => `${f.id}:${f.type}`;
+  const currentIds = new Set(form.fields.map((f) => f.id));
+  const columns: { key: string; label: string }[] = form.fields.map((f) => ({ key: columnKey(f), label: f.label }));
+  const known = new Set(columns.map((c) => c.key));
   for (const r of responses) {
     for (const f of r.fields) {
-      if (!known.has(f.id)) {
-        known.add(f.id);
-        columns.push({ id: f.id, label: `${f.label} (удалено)` });
+      const key = columnKey(f);
+      if (known.has(key)) continue;
+      known.add(key);
+      let suffix = currentIds.has(f.id) ? `прежний тип: ${fieldTypeLabel(f.type)}` : 'удалено';
+      // A deleted field that also changed type already has a column: tell the two apart by type.
+      if (!currentIds.has(f.id) && columns.some((c) => c.key.startsWith(`${f.id}:`))) {
+        suffix += `, ${fieldTypeLabel(f.type)}`;
       }
+      columns.push({ key, label: `${f.label} (${suffix})` });
     }
   }
 
   const dateFmt = new Intl.DateTimeFormat('ru-RU', { dateStyle: 'short', timeStyle: 'medium' });
   const lines = [['Дата отправки', ...columns.map((c) => c.label)].map((h) => csvCell(h)).join(';')];
   for (const r of responses) {
-    const byId = new Map(r.fields.map((f) => [f.id, f]));
+    const byKey = new Map(r.fields.map((f) => [columnKey(f), f]));
     const cells = columns.map((c) => {
-      const field = byId.get(c.id);
-      if (!field || r.answers[c.id] === undefined) return '';
-      return csvCell(formatValue(field, r.answers[c.id]), field);
+      const field = byKey.get(c.key);
+      if (!field || r.answers[field.id] === undefined) return '';
+      return csvCell(formatValue(field, r.answers[field.id]), field);
     });
     lines.push([csvCell(dateFmt.format(new Date(r.submittedAt))), ...cells].join(';'));
   }
@@ -211,6 +220,11 @@ export function responsesCsv(store: JsonStore, id: string) {
 }
 
 // ---------- Public ----------
+
+/** 404 for a made-up public link, before a route spends a rate-limit counter on it. */
+export function assertPublicFormExists(store: JsonStore, publicId: string): void {
+  findByPublicId(store.data, publicId);
+}
 
 export function getPublicForm(store: JsonStore, publicId: string) {
   const form = findByPublicId(store.data, publicId);

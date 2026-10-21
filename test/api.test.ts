@@ -263,6 +263,41 @@ describe('forms API', () => {
     assert.ok(row.includes(`"'=HYPERLINK(""x"");""квоты"""`));
   });
 
+  test('CSV keeps answers given before a field type change in their own column', async () => {
+    const city = { id: 'city', type: 'select', label: 'Город', options: [{ id: 'msk', label: 'Москва' }, { id: 'spb', label: 'Питер' }] };
+    const form = await createPublished([city]);
+    const url = `/api/public/forms/${form.publicId}/responses`;
+    assert.equal((await srv.call('POST', url, { answers: { city: 'msk' }, submissionId: randomUUID() })).status, 201);
+    // The editor keeps the field id when only the type changes.
+    const put = await srv.call('PUT', `/api/forms/${form.id}`, {
+      title: form.title, fields: [{ id: 'city', type: 'short_text', label: 'Город' }], version: form.version,
+    });
+    assert.equal(put.status, 200);
+    assert.equal((await srv.call('POST', url, { answers: { city: 'Казань' }, submissionId: randomUUID() })).status, 201);
+
+    const rows = (await srv.call('GET', `/api/forms/${form.id}/responses/csv`)).text.trim().split('\r\n').map((l) => l.split(';'));
+    assert.deepEqual(rows[0], ['Дата отправки', 'Город', 'Город (прежний тип: Выпадающий список)']);
+    const [newer, older] = rows.slice(1);
+    assert.deepEqual(newer.slice(1), ['Казань', '']);
+    assert.deepEqual(older.slice(1), ['', 'Москва']);
+
+    // Once the field is deleted, both of its past types stay distinguishable.
+    const current = (await srv.call('GET', `/api/forms/${form.id}`)).json.form;
+    await srv.call('PUT', `/api/forms/${form.id}`, {
+      title: form.title, fields: [{ id: 'other', type: 'short_text', label: 'Другое' }], version: current.version,
+    });
+    const header = (await srv.call('GET', `/api/forms/${form.id}/responses/csv`)).text.trim().split('\r\n')[0].split(';');
+    assert.deepEqual(header, ['Дата отправки', 'Другое', 'Город (удалено)', 'Город (удалено, Выпадающий список)']);
+  });
+
+  test('publish and unpublish answer 404 for an unknown form before reading the body', async () => {
+    for (const action of ['publish', 'unpublish']) {
+      const r = await srv.call('POST', `/api/forms/${randomUUID()}/${action}`, '{', { raw: true });
+      assert.equal(r.status, 404, action);
+      assert.equal(r.json.error.code, 'NOT_FOUND');
+    }
+  });
+
   test('analytics counts views, starts, submissions and drop-off per field', async () => {
     const form = await createPublished();
     const ev = (sessionId: string, type: string, fieldId?: string) =>

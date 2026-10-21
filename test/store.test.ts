@@ -98,6 +98,33 @@ describe('JsonStore', () => {
     assert.ok(store.recoveredFrom);
   });
 
+  test('nested records the code dereferences later are checked too (field snapshots, form version)', async () => {
+    const form = { id: 'f', publicId: 'p', title: 'T', status: 'draft', version: 1, updatedAt: 'x', fields: [] };
+    const response = { id: 'r', formId: 'f', submittedAt: 'x', answers: {}, fields: [] };
+    const cases = {
+      nullField: { forms: [{ ...form, fields: [null] }], responses: [], sessions: [] },
+      fieldWithoutOptions: { forms: [{ ...form, fields: [{ id: 'a', type: 'select', label: 'A' }] }], responses: [], sessions: [] },
+      noVersion: { forms: [{ ...form, version: undefined }], responses: [], sessions: [] },
+      nullSnapshot: { forms: [form], responses: [{ ...response, fields: [null] }], sessions: [] },
+    };
+    for (const [name, data] of Object.entries(cases)) {
+      fs.mkdirSync(dir(`nested-${name}`), { recursive: true });
+      fs.writeFileSync(path.join(dir(`nested-${name}`), 'db.json'), JSON.stringify(data));
+      const store = await JsonStore.open(dir(`nested-${name}`));
+      assert.ok(store.recoveredFrom, name);
+      assert.deepEqual(store.data.forms, [], name);
+    }
+  });
+
+  test('a valid file saved with a UTF-8 BOM (e.g. by Notepad) loads instead of being set aside', async () => {
+    fs.mkdirSync(dir('bom'), { recursive: true });
+    const data = { forms: [], responses: [], sessions: [{ id: 's', formId: 'f', viewedAt: null, startedAt: null, submittedAt: null, fields: [], lastFieldId: null }] };
+    fs.writeFileSync(path.join(dir('bom'), 'db.json'), `﻿${JSON.stringify(data)}`);
+    const store = await JsonStore.open(dir('bom'));
+    assert.equal(store.recoveredFrom, null);
+    assert.equal(store.data.sessions.length, 1);
+  });
+
   test('backs up a corrupted file and starts empty', async () => {
     fs.mkdirSync(dir('corrupt'), { recursive: true });
     fs.writeFileSync(path.join(dir('corrupt'), 'db.json'), '{"forms": [ broken');
