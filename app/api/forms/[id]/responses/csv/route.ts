@@ -8,7 +8,11 @@ export function GET(_request: Request, ctx: RouteContext<'/api/forms/[id]/respon
     await connection();
     const { id } = await ctx.params;
     const { csv, filename, title } = responsesCsv(await getStore(), id);
-    const utf8Name = encodeURIComponent(`Ответы — ${title}.csv`);
+    // RFC 5987: encodeURIComponent leaves ' ( ) * unescaped; lone surrogates would throw.
+    const utf8Name = encodeURIComponent(`Ответы — ${title.toWellFormed()}.csv`).replace(
+      /['()*]/g,
+      (c) => `%${c.charCodeAt(0).toString(16).toUpperCase()}`,
+    );
     return new Response(csv, {
       headers: {
         'Content-Type': 'text/csv; charset=utf-8',

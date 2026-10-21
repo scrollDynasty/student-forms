@@ -1,3 +1,4 @@
+/* eslint-disable @typescript-eslint/no-explicit-any -- black-box tests inspect untyped JSON responses */
 import { test, describe, beforeAll, afterAll } from 'vitest';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
@@ -323,6 +324,14 @@ describe('forms API', () => {
     assert.equal(csv.status, 404);
   });
 
+  test('PUT without a fields array is rejected instead of wiping the form', async () => {
+    const created = await srv.call('POST', '/api/forms', { title: 'Не стирать', fields: FIELDS });
+    const r = await srv.call('PUT', `/api/forms/${created.json.form.id}`, { title: 'Только название' });
+    assert.equal(r.status, 400);
+    assert.ok(r.json.error.fields.fields);
+    assert.equal((await srv.call('GET', `/api/forms/${created.json.form.id}`)).json.form.fields.length, FIELDS.length);
+  });
+
   test('PUT with a stale version is rejected with 409 VERSION_CONFLICT', async () => {
     const created = await srv.call('POST', '/api/forms', { title: 'Версии' });
     const id = created.json.form.id;
@@ -359,6 +368,47 @@ describe('forms API', () => {
     assert.equal(retry.status, 200);
   });
 
+
+  test('rejects oversized chunked bodies without buffering them (413)', async () => {
+    const chunk = new TextEncoder().encode('x'.repeat(64 * 1024));
+    let sent = 0;
+    const body = new ReadableStream({
+      pull(controller) {
+        if (sent++ < 64) controller.enqueue(chunk); // up to 4 MB, no content-length
+        else controller.close();
+      },
+    });
+    const res = await fetch(`${srv.base}/api/forms`, {
+      method: 'POST', headers: { 'content-type': 'application/json' }, body, duplex: 'half',
+    } as RequestInit);
+    assert.equal(res.status, 413);
+  });
+
+  test('blocks cross-site admin mutations but allows same-origin and non-browser calls', async () => {
+    const created = await srv.call('POST', '/api/forms', { title: 'CSRF' });
+    const evil = await fetch(`${srv.base}/api/forms/${created.json.form.id}`, {
+      method: 'DELETE', headers: { origin: 'https://evil.example' },
+    });
+    assert.equal(evil.status, 403);
+    assert.equal((await evil.json()).error.code, 'FORBIDDEN_ORIGIN');
+    const same = await fetch(`${srv.base}/api/forms/${created.json.form.id}/publish`, {
+      method: 'POST', headers: { origin: srv.base },
+    });
+    assert.equal(same.status, 400, 'same origin passes the check (fails later: no fields)');
+  });
+
+  test('rate-limits bursts of public submissions from one client (429)', async () => {
+    const form = await createPublished();
+    const url = `/api/public/forms/${form.publicId}/responses`;
+    const statuses: number[] = [];
+    for (let i = 0; i < 35; i++) {
+      statuses.push((await srv.call('POST', url, { answers: VALID, submissionId: randomUUID() })).status);
+    }
+    assert.equal(statuses.filter((s) => s === 201).length, 30);
+    assert.equal(statuses.at(-1), 429);
+    const limited = await srv.call('POST', url, { answers: VALID, submissionId: randomUUID() });
+    assert.equal(limited.json.error.code, 'RATE_LIMITED');
+  });
   test('serves the admin and public pages and returns HTML 404 for unknown pages', async () => {
     for (const url of ['/admin', '/f/abcdef1234']) {
       const r = await srv.call('GET', url);

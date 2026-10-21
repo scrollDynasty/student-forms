@@ -53,18 +53,16 @@ const isValidShape = (v: unknown): v is DbData =>
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
 /**
- * Whole-database JSON file kept in memory. Mutations run synchronously against the
- * in-memory copy (atomic within the single Node process) and are persisted with an
- * atomic write: temp file + fsync + rename. Concurrent mutations are coalesced into
- * as few writes as possible; each `mutate` resolves only after its change is on disk.
+ * Whole-database JSON file kept in memory. Mutations are queued and run one at a time
+ * against a draft copy; the draft is written atomically (temp file + fsync + rename) and
+ * only then becomes the live data. So a mutation that throws, or a failed disk write,
+ * leaves no trace, and readers only ever see what is already on disk.
  */
 export class JsonStore {
   readonly file: string;
   data: DbData;
-  writeCount = 0;
   private tmpCounter = 0;
-  private scheduled: Promise<void> | null = null;
-  private writing: Promise<void> = Promise.resolve();
+  private queue: Promise<unknown> = Promise.resolve();
 
   private constructor(readonly dir: string, data: DbData) {
     this.file = path.join(dir, FILE_NAME);
@@ -99,49 +97,45 @@ export class JsonStore {
     }
   }
 
-  async mutate<T>(fn: (data: DbData) => T): Promise<T> {
-    const result = fn(this.data);
-    await this.persist();
-    return result;
-  }
-
-  private persist(): Promise<void> {
-    if (this.scheduled) return this.scheduled;
-    const next = this.writing.then(() => {
-      // Changes made after this point need a new write.
-      this.scheduled = null;
-      return this.writeNow();
-    });
-    this.scheduled = next;
-    this.writing = next.catch(() => undefined);
+  mutate<T>(fn: (data: DbData) => T): Promise<T> {
+    const run = async () => {
+      const draft = structuredClone(this.data);
+      const result = fn(draft);
+      await this.write(draft);
+      this.data = draft;
+      return result;
+    };
+    const next = this.queue.then(run, run);
+    this.queue = next.catch(() => undefined);
     return next;
   }
 
-  private async writeNow(): Promise<void> {
-    const json = JSON.stringify(this.data);
+  private async write(data: DbData): Promise<void> {
+    const json = JSON.stringify(data);
     const tmp = `${this.file}.${process.pid}.${this.tmpCounter++}.tmp`;
-    const handle = await fs.open(tmp, 'w');
     try {
-      await handle.writeFile(json, 'utf8');
-      await handle.sync();
-    } finally {
-      await handle.close();
-    }
-    // On Windows antivirus/indexers can briefly lock the target file.
-    for (let attempt = 0; ; attempt++) {
+      const handle = await fs.open(tmp, 'w');
       try {
-        await fs.rename(tmp, this.file);
-        break;
-      } catch (err) {
-        const code = (err as NodeJS.ErrnoException).code;
-        if (attempt >= 5 || (code !== 'EPERM' && code !== 'EBUSY' && code !== 'EACCES')) {
-          await fs.rm(tmp, { force: true });
-          throw err;
-        }
-        await sleep(20 * (attempt + 1));
+        await handle.writeFile(json, 'utf8');
+        await handle.sync();
+      } finally {
+        await handle.close();
       }
+      // On Windows antivirus/indexers can briefly lock the target file.
+      for (let attempt = 0; ; attempt++) {
+        try {
+          await fs.rename(tmp, this.file);
+          return;
+        } catch (err) {
+          const code = (err as NodeJS.ErrnoException).code;
+          if (attempt >= 5 || (code !== 'EPERM' && code !== 'EBUSY' && code !== 'EACCES')) throw err;
+          await sleep(20 * (attempt + 1));
+        }
+      }
+    } catch (err) {
+      await fs.rm(tmp, { force: true }).catch(() => undefined);
+      throw err;
     }
-    this.writeCount++;
   }
 }
 

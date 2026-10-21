@@ -27,7 +27,7 @@ describe('JsonStore', () => {
     assert.equal(again.data.sessions[0].id, 's1');
   });
 
-  test('coalesces concurrent writes, leaves no temp files and keeps valid JSON', async () => {
+  test('serializes concurrent mutations: every change persisted, no temp files, valid JSON', async () => {
     const store = await JsonStore.open(dir('concurrent'));
     await Promise.all(
       Array.from({ length: 50 }, (_, i) =>
@@ -39,8 +39,37 @@ describe('JsonStore', () => {
     const files = fs.readdirSync(dir('concurrent'));
     assert.deepEqual(files.filter((f) => f.endsWith('.tmp')), []);
     const db = JSON.parse(fs.readFileSync(path.join(dir('concurrent'), 'db.json'), 'utf8'));
-    assert.equal(db.sessions.length, 50);
-    assert.ok(store.writeCount < 50, `expected coalesced writes, got ${store.writeCount}`);
+    assert.deepEqual(db.sessions.map((s: { id: string }) => s.id), Array.from({ length: 50 }, (_, i) => `s${i}`));
+  });
+
+  test('a failed write rejects the mutation and leaves memory unchanged (no phantom data)', async (ctx) => {
+    if (process.platform === 'win32' || process.getuid?.() === 0) ctx.skip();
+    const store = await JsonStore.open(dir('readonly'));
+    await store.mutate((d) => { d.forms.length = 0; });
+    fs.chmodSync(dir('readonly'), 0o500);
+    try {
+      await assert.rejects(
+        store.mutate((d) => {
+          d.sessions.push({ id: 'ghost', formId: 'f', viewedAt: null, startedAt: null, submittedAt: null, fields: [], lastFieldId: null });
+        }),
+      );
+      assert.equal(store.data.sessions.length, 0);
+    } finally {
+      fs.chmodSync(dir('readonly'), 0o700);
+    }
+    // The store keeps working once the disk is writable again.
+    await store.mutate((d) => { d.sessions.push({ id: 'ok', formId: 'f', viewedAt: null, startedAt: null, submittedAt: null, fields: [], lastFieldId: null }); });
+    assert.deepEqual(store.data.sessions.map((s) => s.id), ['ok']);
+  });
+
+  test('a mutation that throws changes nothing and is not written', async () => {
+    const store = await JsonStore.open(dir('throws'));
+    await assert.rejects(store.mutate((d) => {
+      d.sessions.push({ id: 'partial', formId: 'f', viewedAt: null, startedAt: null, submittedAt: null, fields: [], lastFieldId: null });
+      throw new Error('validation failed halfway');
+    }), /halfway/);
+    assert.equal(store.data.sessions.length, 0);
+    assert.equal(fs.existsSync(path.join(dir('throws'), 'db.json')), false);
   });
 
   test('backs up a corrupted file and starts empty', async () => {

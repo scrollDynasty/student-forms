@@ -12,6 +12,8 @@ import type { DbData, JsonStore, StoredForm, StoredResponse, StoredSession } fro
 
 /** Analytics sessions kept per form; extra sessions are ignored to bound file growth. */
 const MAX_SESSIONS_PER_FORM = 20_000;
+/** Hard cap that keeps a scripted flood from growing the data file without bound. */
+const MAX_RESPONSES_PER_FORM = 10_000;
 const EVENT_TYPES = new Set(['view', 'start', 'field']);
 
 const now = () => new Date().toISOString();
@@ -42,7 +44,9 @@ export function toPublicForm(form: StoredForm) {
 export function listForms(store: JsonStore) {
   const counts = new Map<string, number>();
   for (const r of store.data.responses) counts.set(r.formId, (counts.get(r.formId) ?? 0) + 1);
-  return store.data.forms
+  // Newest first; sort is stable, so equal timestamps (same millisecond) keep the latest-created first.
+  return [...store.data.forms]
+    .reverse()
     .map((f) => ({
       id: f.id,
       publicId: f.publicId,
@@ -88,9 +92,10 @@ export function updateForm(store: JsonStore, id: string, body: Record<string, un
   const { value, errors } = normalizeFormInput(body);
   return store.mutate((data) => {
     const form = findForm(data, id);
-    if (body.version !== undefined && body.version !== form.version) {
+    if (body.version != null && body.version !== form.version) {
       throw new ApiError(409, 'VERSION_CONFLICT', 'Форму уже изменили в другой вкладке. Загрузите актуальную версию.');
     }
+    if (!Array.isArray(body.fields)) throw validationError({ fields: 'Передайте полный список полей формы' });
     if (!value || hasErrors(errors)) throw validationError(errors);
     if (form.status === 'published' && value.fields.length === 0) {
       throw validationError({ fields: 'У опубликованной формы должно быть хотя бы одно поле' });
@@ -154,8 +159,8 @@ const FORMULA_START = /^[=+\-@\t\r]/;
 
 function csvCell(value: string, field?: Field): string {
   let v = value;
-  // Neutralize spreadsheet formulas; phones and numbers legitimately start with + or -.
-  if (FORMULA_START.test(v) && field?.type !== 'phone' && field?.type !== 'number') v = `'${v}`;
+  // Neutralize spreadsheet formulas; validated numbers legitimately start with -.
+  if (FORMULA_START.test(v) && field?.type !== 'number') v = `'${v}`;
   return /[";\r\n]/.test(v) ? `"${v.replace(/"/g, '""')}"` : v;
 }
 
@@ -236,6 +241,9 @@ export function submitResponse(
     }
     const { values, errors } = validateAnswers(form.fields, body.answers);
     if (hasErrors(errors)) throw validationError(errors);
+    if (data.responses.filter((r) => r.formId === form.id).length >= MAX_RESPONSES_PER_FORM) {
+      throw new ApiError(429, 'RESPONSE_LIMIT', 'Форма больше не принимает ответы: достигнут лимит');
+    }
 
     const submittedAt = now();
     const sessionId = isUuid(body.sessionId) ? body.sessionId : null;

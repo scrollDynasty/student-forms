@@ -19,12 +19,30 @@ export const notFound = (what = 'Ресурс') => new ApiError(404, 'NOT_FOUND'
 export const validationError = (fields: ErrorMap, message = 'Проверьте правильность заполнения') =>
   new ApiError(400, 'VALIDATION_ERROR', message, fields);
 
+/** Reads the body as UTF-8, aborting as soon as it exceeds the limit (chunked bodies included). */
+async function readLimitedText(request: Request): Promise<string> {
+  const declared = Number(request.headers.get('content-length'));
+  if (Number.isFinite(declared) && declared > MAX_BODY_BYTES) throw tooLarge();
+  if (!request.body) return '';
+  const reader = request.body.getReader();
+  const chunks: Uint8Array[] = [];
+  let size = 0;
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    size += value.byteLength;
+    if (size > MAX_BODY_BYTES) {
+      await reader.cancel();
+      throw tooLarge();
+    }
+    chunks.push(value);
+  }
+  return Buffer.concat(chunks).toString('utf8');
+}
+
 /** Reads a JSON object body with a size limit; anything else is a 4xx ApiError. */
 export async function readJsonObject(request: Request): Promise<Record<string, unknown>> {
-  const declared = Number(request.headers.get('content-length') ?? 0);
-  if (declared > MAX_BODY_BYTES) throw tooLarge();
-  const text = await request.text();
-  if (Buffer.byteLength(text, 'utf8') > MAX_BODY_BYTES) throw tooLarge();
+  const text = await readLimitedText(request);
   let parsed: unknown;
   try {
     parsed = JSON.parse(text);
@@ -39,6 +57,45 @@ export async function readJsonObject(request: Request): Promise<Record<string, u
 
 const tooLarge = () =>
   new ApiError(413, 'PAYLOAD_TOO_LARGE', `Слишком большой запрос (максимум ${MAX_BODY_BYTES / 1024} КБ)`);
+
+/**
+ * The admin API has no auth (by the task's requirement), so at least stop other sites from
+ * driving it through a visitor's browser: browsers always send Origin on cross-site requests.
+ */
+export function assertSameOrigin(request: Request): void {
+  const origin = request.headers.get('origin');
+  if (!origin) return; // curl, tests and same-origin GETs
+  const host = request.headers.get('x-forwarded-host') ?? request.headers.get('host');
+  let originHost: string | null = null;
+  try {
+    originHost = new URL(origin).host;
+  } catch {
+    /* "null" or garbage */
+  }
+  if (!host || originHost !== host) {
+    throw new ApiError(403, 'FORBIDDEN_ORIGIN', 'Запрос с другого сайта отклонён');
+  }
+}
+
+const buckets = new Map<string, { count: number; resetAt: number }>();
+
+/** Fixed-window in-memory rate limit per client key; generous enough for real students. */
+export function rateLimit(request: Request, scope: string, limit: number, windowMs = 60_000): void {
+  const ip = request.headers.get('x-forwarded-for')?.split(',')[0]?.trim() || 'local';
+  const key = `${scope}|${ip}`;
+  const t = Date.now();
+  if (buckets.size > 10_000) {
+    for (const [k, b] of buckets) if (b.resetAt <= t) buckets.delete(k);
+  }
+  const bucket = buckets.get(key);
+  if (!bucket || bucket.resetAt <= t) {
+    buckets.set(key, { count: 1, resetAt: t + windowMs });
+    return;
+  }
+  if (++bucket.count > limit) {
+    throw new ApiError(429, 'RATE_LIMITED', 'Слишком много запросов. Попробуйте через минуту.');
+  }
+}
 
 const NO_STORE = { 'Cache-Control': 'no-store' };
 

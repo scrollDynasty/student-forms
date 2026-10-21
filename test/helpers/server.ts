@@ -1,3 +1,4 @@
+/* eslint-disable @typescript-eslint/no-explicit-any -- black-box tests inspect untyped JSON responses */
 import { spawn, type ChildProcess } from 'node:child_process';
 import net from 'node:net';
 import path from 'node:path';

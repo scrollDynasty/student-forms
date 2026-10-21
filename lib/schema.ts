@@ -119,7 +119,10 @@ const str = (v: unknown) => (typeof v === 'string' ? v.trim() : '');
 function toNumberOrNull(v: unknown): number | null {
   if (v === null || v === undefined || v === '') return null;
   if (typeof v === 'number') return Number.isFinite(v) ? v : NaN;
-  if (typeof v === 'string' && NUMERIC_RE.test(v.trim())) return Number(v.trim().replace(',', '.'));
+  if (typeof v === 'string' && NUMERIC_RE.test(v.trim())) {
+    const n = Number(v.trim().replace(',', '.'));
+    return Number.isFinite(n) ? n : NaN;
+  }
   return NaN;
 }
 

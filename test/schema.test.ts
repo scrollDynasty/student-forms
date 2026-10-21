@@ -227,4 +227,10 @@ describe('hardening', () => {
     assert.equal(ids.size, 50);
     for (const id of ids) assert.match(id, /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/);
   });
+
+  test('numbers that overflow to Infinity are rejected (would be stored as null)', () => {
+    const fields = [field({ id: 'n', type: 'number' })];
+    assert.ok(validateAnswers(fields, { n: '9'.repeat(400) }).errors.n);
+    assert.ok(norm({ title: 'T', fields: [field({ type: 'number', min: '9'.repeat(400) })] }).errors['fields.0.min']);
+  });
 });
