@@ -8,7 +8,8 @@
     "start": "next build && next start",
     "lint": "eslint",
     "serve": "next start",
-    "test": "next build && vitest run"
+    "test": "next build && vitest run",
+    "typecheck": "next typegen && tsc --noEmit"
   },
   "dependencies": {
     "geist": "1.8.1",
